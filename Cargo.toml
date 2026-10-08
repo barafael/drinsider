@@ -1,0 +1,49 @@
+[package]
+name = "drinsider"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "A windowed port of binsider: analyze ELF binaries like a normal person"
+repository = "https://github.com/barafael/drinsider"
+
+[dependencies]
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts"] }
+egui = "0.36.2"
+egui_extras = { version = "0.36.2", default-features = false }
+elf = "0.8.0"
+bytesize = "2.7"
+thiserror = "2"
+rust-strings = "0.6"
+
+# Desktop only: filesystem metadata, dependency resolution and ptrace.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { version = "0.36.2", default-features = false, features = ["x11", "wayland", "links"] }
+lddtree = "0.5.1"
+sysinfo = { version = "0.38", default-features = false, features = ["user"] }
+chrono = "0.4"
+lurk-cli = "0.3.14"
+console = "0.16"
+nix = { version = "0.30", features = ["ptrace", "signal", "process"] }
+
+# Browser build (trunk).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.126"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3.103"
+web-sys = { version = "0.3.103", features = [
+  "Window",
+  "Document",
+  "Element",
+  "HtmlElement",
+  "HtmlCanvasElement",
+  "HtmlInputElement",
+  "FileList",
+  "File",
+  "Blob",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
