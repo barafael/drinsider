@@ -7,8 +7,8 @@ use elf::parse::ParsingTable;
 use elf::section::SectionHeader;
 use elf::segment::ProgramHeader;
 use elf::string_table::StringTable;
+use elf::{ParseError, to_str::*};
 use elf::{endian::AnyEndian, file::FileHeader as ElfFileHeader};
-use elf::{to_str::*, ParseError};
 use std::io::Error as IoError;
 
 /// ELF file header wrapper.

@@ -2,7 +2,7 @@
 //! Copyright Orhun Parmaksız, MIT OR Apache-2.0.
 
 use crate::elf::Property;
-use elf::{dynamic::Dyn, endian::AnyEndian, parse::ParsingTable, ParseError};
+use elf::{ParseError, dynamic::Dyn, endian::AnyEndian, parse::ParsingTable};
 use std::io::Error as IoError;
 
 /// ELF dynamic section wrapper.

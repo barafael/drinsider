@@ -1,6 +1,8 @@
 //! High-contrast palettes and the flat, dense style.
 
-use egui::{Color32, CornerRadius, FontId, Shadow, Stroke, Style, TextStyle, Theme, ThemePreference, Ui};
+use egui::{
+    Color32, CornerRadius, FontId, Shadow, Stroke, Style, TextStyle, Theme, ThemePreference, Ui,
+};
 
 /// Semantic colors.
 #[derive(Clone, Copy, Debug)]
@@ -97,7 +99,11 @@ pub const LIGHT: Palette = Palette {
 
 /// The palette of the active theme.
 pub fn of(ui: &Ui) -> &'static Palette {
-    if ui.visuals().dark_mode { &DARK } else { &LIGHT }
+    if ui.visuals().dark_mode {
+        &DARK
+    } else {
+        &LIGHT
+    }
 }
 
 /// Installs both themes; the system preference picks one.
@@ -148,7 +154,12 @@ fn apply(style: &mut Style, p: &Palette) {
     let w = &mut v.widgets;
     for (widget, bg, fg, stroke) in [
         (&mut w.noninteractive, p.bg, p.text, p.border),
-        (&mut w.inactive, Color32::TRANSPARENT, p.text, Color32::TRANSPARENT),
+        (
+            &mut w.inactive,
+            Color32::TRANSPARENT,
+            p.text,
+            Color32::TRANSPARENT,
+        ),
         (&mut w.hovered, p.hover, p.strong, p.accent),
         (&mut w.active, p.accent, p.on_accent, p.accent),
         (&mut w.open, p.hover, p.strong, p.accent),

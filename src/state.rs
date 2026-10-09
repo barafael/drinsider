@@ -89,7 +89,9 @@ impl Tab {
 
     /// The tab `amount` positions to the left, wrapping to the last.
     pub fn previous(self, amount: usize) -> Tab {
-        Self::ALL[(self as usize).checked_sub(amount).unwrap_or(Self::ALL.len() - 1)]
+        Self::ALL[(self as usize)
+            .checked_sub(amount)
+            .unwrap_or(Self::ALL.len() - 1)]
     }
 
     /// Parses binsider's `--tab` values (plus the short titles).
@@ -309,7 +311,11 @@ impl State {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(paths: &[PathBuf], options: Options, ctx: egui::Context) -> Self {
         let mut state = Self::empty(options, ctx);
-        match paths.iter().map(|p| Analyzer::new(p)).collect::<Result<Vec<_>, _>>() {
+        match paths
+            .iter()
+            .map(|p| Analyzer::new(p))
+            .collect::<Result<Vec<_>, _>>()
+        {
             Ok(files) => state.files = files,
             Err(e) => state.fatal = Some(e.to_string()),
         }
@@ -564,7 +570,9 @@ impl State {
             Command::Top => self.selection.first(),
             Command::Bottom => self.selection.last(),
             Command::ShowDetails => match self.selected_dependency() {
-                Some(Dependency { path: Some(path), .. }) => self.open_file(path.clone()),
+                Some(Dependency {
+                    path: Some(path), ..
+                }) => self.open_file(path.clone()),
                 Some(dependency) if self.analyzer().is_some_and(|a| a.resolved) => {
                     self.notice = Some(format!("Library not found: `{}`", dependency.name));
                 }
@@ -586,7 +594,12 @@ impl State {
         match command {
             Command::Next(ScrollType::Table, n) => self.select_info(self.static_.info_index + n),
             Command::Previous(ScrollType::Table, n) => {
-                self.select_info(self.static_.info_index.checked_sub(n).unwrap_or(INFO_TABS.len() - 1));
+                self.select_info(
+                    self.static_
+                        .info_index
+                        .checked_sub(n)
+                        .unwrap_or(INFO_TABS.len() - 1),
+                );
             }
             Command::Next(ScrollType::List, n) => match self.static_.block {
                 Block::Headers => self.static_.headers_scroll.forward(n),
@@ -599,10 +612,14 @@ impl State {
                 Block::Table => self.selection.previous(n),
             },
             Command::Next(ScrollType::Block, _) => self.static_.block = self.static_.block.next(),
-            Command::Previous(ScrollType::Block, _) => self.static_.block = self.static_.block.previous(),
+            Command::Previous(ScrollType::Block, _) => {
+                self.static_.block = self.static_.block.previous()
+            }
             Command::Top => self.selection.first(),
             Command::Bottom => self.selection.last(),
-            Command::ShowDetails => self.show_details = !self.show_details && self.selected_row().is_some(),
+            Command::ShowDetails => {
+                self.show_details = !self.show_details && self.selected_row().is_some()
+            }
             Command::HumanReadable => {
                 if let Some(analyzer) = self.files.last_mut() {
                     analyzer.elf.toggle_readability();
@@ -638,7 +655,9 @@ impl State {
             Command::Previous(ScrollType::List, n) => self.selection.previous(n),
             Command::Top => self.selection.first(),
             Command::Bottom => self.selection.last(),
-            Command::ShowDetails => self.show_details = !self.show_details && self.selected_string().is_some(),
+            Command::ShowDetails => {
+                self.show_details = !self.show_details && self.selected_string().is_some()
+            }
             Command::Increment => {
                 self.strings.min_length += 1;
                 self.extract_strings();
@@ -677,22 +696,28 @@ impl State {
     /// An even-length hex string searches for those bytes, anything else for
     /// the text itself.
     fn hex_search(&mut self) {
-        let Some(analyzer) = self.analyzer() else { return };
+        let Some(analyzer) = self.analyzer() else {
+            return;
+        };
         let query = self.search.trim();
         if query.is_empty() {
             return;
         }
-        let needle: Vec<u8> = match query.len().is_multiple_of(2) && query.chars().all(|c| c.is_ascii_hexdigit()) {
-            true => (0..query.len())
-                .step_by(2)
-                .filter_map(|i| u8::from_str_radix(&query[i..i + 2], 16).ok())
-                .collect(),
-            false => query.as_bytes().to_vec(),
-        };
+        let needle: Vec<u8> =
+            match query.len().is_multiple_of(2) && query.chars().all(|c| c.is_ascii_hexdigit()) {
+                true => (0..query.len())
+                    .step_by(2)
+                    .filter_map(|i| u8::from_str_radix(&query[i..i + 2], 16).ok())
+                    .collect(),
+                false => query.as_bytes().to_vec(),
+            };
         let bytes = &analyzer.bytes;
         let start = self.hexdump.cursor.index + 1;
-        let find = |range: std::ops::Range<usize>| range.into_iter().find(|&i| bytes[i..].starts_with(&needle));
-        match find(start.min(bytes.len())..bytes.len()).or_else(|| find(0..start.min(bytes.len()))) {
+        let find = |range: std::ops::Range<usize>| {
+            range.into_iter().find(|&i| bytes[i..].starts_with(&needle))
+        };
+        match find(start.min(bytes.len())..bytes.len()).or_else(|| find(0..start.min(bytes.len())))
+        {
             Some(offset) => self.hexdump.cursor.jump(offset),
             None => self.notice = Some(format!("Not found: `{query}`")),
         }
@@ -772,9 +797,9 @@ impl State {
     fn extract_strings(&mut self) {
         self.strings.found = None;
         self.strings.rows.clear();
-        self.strings.pending = self
-            .analyzer()
-            .map(|a| crate::strings::extract(a.bytes.clone(), self.strings.min_length, self.ctx.clone()));
+        self.strings.pending = self.analyzer().map(|a| {
+            crate::strings::extract(a.bytes.clone(), self.strings.min_length, self.ctx.clone())
+        });
         if self.tab == Tab::Strings {
             self.handle_tab();
         }
@@ -786,7 +811,12 @@ impl State {
         if cfg!(target_arch = "wasm32") || matches!(self.dynamic.trace, Trace::Running) {
             return;
         }
-        let Some(path) = self.analyzer().map(|a| a.path.to_string_lossy().into_owned()) else { return };
+        let Some(path) = self
+            .analyzer()
+            .map(|a| a.path.to_string_lossy().into_owned())
+        else {
+            return;
+        };
         let mut command = vec![path];
         // The command line arguments belong to the file given on the command line.
         if self.files.len() == 1 {
@@ -796,7 +826,11 @@ impl State {
         self.dynamic.lines.clear();
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.dynamic.pending = Some(crate::tracer::trace(command, self.options.trace.clone(), self.ctx.clone()));
+            self.dynamic.pending = Some(crate::tracer::trace(
+                command,
+                self.options.trace.clone(),
+                self.ctx.clone(),
+            ));
         }
     }
 
@@ -945,7 +979,10 @@ mod tests {
         assert!(!state.show_details && state.running);
         // Backspace outside the prompt reopens it and deletes one character.
         state.run_command(Command::Input(InputCommand::Backspace), &ctx());
-        assert_eq!((state.prompt, state.search.as_str()), (Some(Prompt::Search), "LOA"));
+        assert_eq!(
+            (state.prompt, state.search.as_str()),
+            (Some(Prompt::Search), "LOA")
+        );
         state.run_command(Command::Input(InputCommand::Exit), &ctx());
         assert_eq!((state.prompt, state.search.as_str()), (None, ""));
         assert_eq!(state.static_.rows.len(), all);
@@ -1016,7 +1053,11 @@ mod tests {
             min_strings_len: 4,
             ..Options::default()
         };
-        let state = State::new(&[PathBuf::from("/bin/ls"), PathBuf::from("/bin/cat")], options, ctx());
+        let state = State::new(
+            &[PathBuf::from("/bin/ls"), PathBuf::from("/bin/cat")],
+            options,
+            ctx(),
+        );
         assert_eq!(state.tab, Tab::Strings);
         assert_eq!(state.strings.min_length, 4);
         assert_eq!(state.files.len(), 2);
@@ -1031,7 +1072,12 @@ mod tests {
         assert!(state.selection.len >= 3);
         state.run_command(Command::ShowDetails, &ctx());
         assert_eq!(state.files.len(), 1);
-        assert!(state.notice.as_deref().is_some_and(|n| n.contains("browser")));
+        assert!(
+            state
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("browser"))
+        );
         // A bad upload replaces nothing and reports.
         state.open_bytes("junk", b"junk".to_vec());
         assert_eq!(state.files.len(), 1);

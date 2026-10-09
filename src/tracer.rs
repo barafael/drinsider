@@ -34,7 +34,11 @@ pub type Traced = Result<TraceData, String>;
 ///
 /// The result arrives on the returned channel; `ctx` is repainted when it does.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn trace(command: Vec<String>, options: TraceOptions, ctx: egui::Context) -> mpsc::Receiver<Traced> {
+pub fn trace(
+    command: Vec<String>,
+    options: TraceOptions,
+    ctx: egui::Context,
+) -> mpsc::Receiver<Traced> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(native::run(&command, options));
@@ -42,7 +46,6 @@ pub fn trace(command: Vec<String>, options: TraceOptions, ctx: egui::Context) ->
     });
     rx
 }
-
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
@@ -94,7 +97,10 @@ mod native {
         drop(tracer);
         let _ = waitpid(pid, Some(WaitPidFlag::WNOHANG));
         Ok(TraceData {
-            syscalls: String::from_utf8_lossy(&syscalls).lines().map(ansi::parse).collect(),
+            syscalls: String::from_utf8_lossy(&syscalls)
+                .lines()
+                .map(ansi::parse)
+                .collect(),
             summary: ansi::parse(&String::from_utf8_lossy(&summary)).text,
         })
     }

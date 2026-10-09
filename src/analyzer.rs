@@ -69,19 +69,26 @@ fn needed_libraries(elf: &ElfBytes<'_, AnyEndian>, bytes: &[u8]) -> Vec<Dependen
     if let Some(interpreter) = interpreter(elf, bytes) {
         names.push(interpreter);
     }
-    if let (Ok(Some(dynamic)), Ok(Some((_, strtab)))) = (elf.dynamic(), elf.dynamic_symbol_table()) {
+    if let (Ok(Some(dynamic)), Ok(Some((_, strtab)))) = (elf.dynamic(), elf.dynamic_symbol_table())
+    {
         for entry in dynamic.iter().filter(|d| d.d_tag == elf::abi::DT_NEEDED) {
             if let Ok(name) = strtab.get(entry.d_val() as usize) {
                 names.push(name.to_string());
             }
         }
     }
-    names.into_iter().map(|name| Dependency { name, path: None }).collect()
+    names
+        .into_iter()
+        .map(|name| Dependency { name, path: None })
+        .collect()
 }
 
 /// The program interpreter from `PT_INTERP`, e.g. `/lib64/ld-linux-x86-64.so.2`.
 fn interpreter(elf: &ElfBytes<'_, AnyEndian>, bytes: &[u8]) -> Option<String> {
-    let segment = elf.segments()?.iter().find(|s| s.p_type == elf::abi::PT_INTERP)?;
+    let segment = elf
+        .segments()?
+        .iter()
+        .find(|s| s.p_type == elf::abi::PT_INTERP)?;
     let start = usize::try_from(segment.p_offset).ok()?;
     let end = start.checked_add(usize::try_from(segment.p_filesz).ok()?)?;
     let raw = bytes.get(start..end)?;
@@ -129,14 +136,19 @@ mod native {
             .into_iter()
             .map(|(name, lib)| Dependency {
                 name,
-                path: lib.realpath.or_else(|| lib.path.is_absolute().then_some(lib.path)),
+                path: lib
+                    .realpath
+                    .or_else(|| lib.path.is_absolute().then_some(lib.path)),
             })
             .collect();
         if let Some(interpreter) = tree.interpreter
             && !dependencies.iter().any(|d| d.name == interpreter)
         {
             let path = fs::canonicalize(&interpreter).ok();
-            dependencies.push(Dependency { name: interpreter, path });
+            dependencies.push(Dependency {
+                name: interpreter,
+                path,
+            });
         }
         sort_dependencies(&mut dependencies);
         Ok(dependencies)
@@ -153,7 +165,11 @@ mod tests {
     fn sample_from_bytes() {
         let analyzer = Analyzer::from_bytes("sample", SAMPLE.to_vec()).expect("parse sample");
         assert!(!analyzer.resolved);
-        let names: Vec<_> = analyzer.dependencies.iter().map(|d| d.name.as_str()).collect();
+        let names: Vec<_> = analyzer
+            .dependencies
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
         assert!(names.iter().any(|n| n.starts_with("libc.so")), "{names:?}");
         assert!(names.iter().any(|n| n.starts_with("libm.so")), "{names:?}");
         assert!(names.iter().any(|n| n.contains("ld-linux")), "{names:?}");
@@ -168,9 +184,13 @@ mod tests {
         assert!(analyzer.resolved);
         assert_eq!(analyzer.file.name, "ls");
         let has = |pred: &dyn Fn(&Dependency) -> bool| analyzer.dependencies.iter().any(pred);
-        assert!(has(&|d| d.name.starts_with("libc.so") && d.path.as_ref().is_some_and(|p| p.is_absolute())));
+        assert!(has(
+            &|d| d.name.starts_with("libc.so") && d.path.as_ref().is_some_and(|p| p.is_absolute())
+        ));
         // The interpreter is listed, like binsider does.
-        assert!(has(&|d| d.name.starts_with('/') && d.name.contains("ld-linux")));
+        assert!(has(
+            &|d| d.name.starts_with('/') && d.name.contains("ld-linux")
+        ));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

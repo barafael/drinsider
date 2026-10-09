@@ -75,7 +75,9 @@ Options:
   -V, --version            Print the version";
 
     /// Parses the arguments into the breadcrumb of files and the options.
-    pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<(Vec<PathBuf>, Options), String> {
+    pub fn parse(
+        args: impl IntoIterator<Item = OsString>,
+    ) -> Result<(Vec<PathBuf>, Options), String> {
         let mut options = Options::default();
         let mut files = Vec::new();
         let mut args = args.into_iter();
@@ -94,15 +96,20 @@ Options:
                     println!("drinsider {}", env!("CARGO_PKG_VERSION"));
                     process::exit(0);
                 }
-                Some("-n" | "--min-len") => options.min_strings_len = number("--min-len", args.next())?.max(1),
+                Some("-n" | "--min-len") => {
+                    options.min_strings_len = number("--min-len", args.next())?.max(1)
+                }
                 Some("-t" | "--tab") => {
                     let value = args.next().unwrap_or_default();
                     let name = value.to_string_lossy();
-                    options.tab = Tab::from_name(&name).ok_or_else(|| format!("unknown tab `{name}`\n\n{USAGE}"))?;
+                    options.tab = Tab::from_name(&name)
+                        .ok_or_else(|| format!("unknown tab `{name}`\n\n{USAGE}"))?;
                 }
                 Some("--syscall-number") => options.trace.syscall_number = true,
                 Some("--no-abbrev") => options.trace.no_abbrev = true,
-                Some("--string-limit") => options.trace.string_limit = Some(number("--string-limit", args.next())?),
+                Some("--string-limit") => {
+                    options.trace.string_limit = Some(number("--string-limit", args.next())?)
+                }
                 Some(flag) if flag.starts_with('-') && flag.len() > 1 => {
                     return Err(format!("unknown option `{flag}`\n\n{USAGE}"));
                 }
@@ -110,14 +117,20 @@ Options:
             }
         }
         if options.trace.no_abbrev && options.trace.string_limit.is_some() {
-            return Err(format!("--no-abbrev conflicts with --string-limit\n\n{USAGE}"));
+            return Err(format!(
+                "--no-abbrev conflicts with --string-limit\n\n{USAGE}"
+            ));
         }
         if files.is_empty() {
             files.push(env::current_exe().map_err(|e| e.to_string())?);
         }
         // binsider: the last file may be "binary arg1 arg2".
         let last = files.pop().expect("at least one file");
-        let mut parts = last.to_string_lossy().split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+        let mut parts = last
+            .to_string_lossy()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         let last = if !last.exists() && parts.len() > 1 {
             options.arguments = parts.split_off(1);
             PathBuf::from(parts.remove(0))
@@ -134,7 +147,11 @@ Options:
             return path;
         }
         env::var_os("PATH")
-            .and_then(|paths| env::split_paths(&paths).map(|dir| dir.join(&path)).find(|c| c.is_file()))
+            .and_then(|paths| {
+                env::split_paths(&paths)
+                    .map(|dir| dir.join(&path))
+                    .find(|c| c.is_file())
+            })
             .unwrap_or(path)
     }
 
@@ -148,8 +165,16 @@ Options:
 
         #[test]
         fn flags_files_and_arguments() {
-            let (files, options) =
-                parse_strs(&["-n", "8", "--tab", "static-analysis", "--syscall-number", "/bin/cat", "ls -la"]).unwrap();
+            let (files, options) = parse_strs(&[
+                "-n",
+                "8",
+                "--tab",
+                "static-analysis",
+                "--syscall-number",
+                "/bin/cat",
+                "ls -la",
+            ])
+            .unwrap();
             assert_eq!(options.min_strings_len, 8);
             assert_eq!(options.tab, Tab::StaticAnalysis);
             assert!(options.trace.syscall_number);

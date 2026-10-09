@@ -72,31 +72,91 @@ pub enum InputCommand {
 /// `Modifiers::NONE` ignores shift when matching, so shifted bindings come
 /// first; `COMMAND` (Ctrl on Linux) bindings come before the bare letters.
 const BINDINGS: &[(Modifiers, Key, Command)] = &[
-    (Modifiers::SHIFT, Key::Tab, Command::Previous(ScrollType::Tab, 1)),
+    (
+        Modifiers::SHIFT,
+        Key::Tab,
+        Command::Previous(ScrollType::Tab, 1),
+    ),
     (Modifiers::NONE, Key::Tab, Command::Next(ScrollType::Tab, 1)),
-    (Modifiers::COMMAND, Key::D, Command::Next(ScrollType::List, 5)),
-    (Modifiers::COMMAND, Key::U, Command::Previous(ScrollType::List, 5)),
-    (Modifiers::COMMAND, Key::F, Command::Input(InputCommand::Enter)),
-    (Modifiers::NONE, Key::ArrowRight, Command::Next(ScrollType::Table, 1)),
+    (
+        Modifiers::COMMAND,
+        Key::D,
+        Command::Next(ScrollType::List, 5),
+    ),
+    (
+        Modifiers::COMMAND,
+        Key::U,
+        Command::Previous(ScrollType::List, 5),
+    ),
+    (
+        Modifiers::COMMAND,
+        Key::F,
+        Command::Input(InputCommand::Enter),
+    ),
+    (
+        Modifiers::NONE,
+        Key::ArrowRight,
+        Command::Next(ScrollType::Table, 1),
+    ),
     (Modifiers::NONE, Key::L, Command::Next(ScrollType::Table, 1)),
-    (Modifiers::NONE, Key::ArrowLeft, Command::Previous(ScrollType::Table, 1)),
-    (Modifiers::NONE, Key::H, Command::Previous(ScrollType::Table, 1)),
-    (Modifiers::NONE, Key::ArrowDown, Command::Next(ScrollType::List, 1)),
+    (
+        Modifiers::NONE,
+        Key::ArrowLeft,
+        Command::Previous(ScrollType::Table, 1),
+    ),
+    (
+        Modifiers::NONE,
+        Key::H,
+        Command::Previous(ScrollType::Table, 1),
+    ),
+    (
+        Modifiers::NONE,
+        Key::ArrowDown,
+        Command::Next(ScrollType::List, 1),
+    ),
     (Modifiers::NONE, Key::J, Command::Next(ScrollType::List, 1)),
-    (Modifiers::NONE, Key::ArrowUp, Command::Previous(ScrollType::List, 1)),
-    (Modifiers::NONE, Key::K, Command::Previous(ScrollType::List, 1)),
-    (Modifiers::NONE, Key::PageDown, Command::Next(ScrollType::List, 5)),
-    (Modifiers::NONE, Key::PageUp, Command::Previous(ScrollType::List, 5)),
+    (
+        Modifiers::NONE,
+        Key::ArrowUp,
+        Command::Previous(ScrollType::List, 1),
+    ),
+    (
+        Modifiers::NONE,
+        Key::K,
+        Command::Previous(ScrollType::List, 1),
+    ),
+    (
+        Modifiers::NONE,
+        Key::PageDown,
+        Command::Next(ScrollType::List, 5),
+    ),
+    (
+        Modifiers::NONE,
+        Key::PageUp,
+        Command::Previous(ScrollType::List, 5),
+    ),
     (Modifiers::NONE, Key::N, Command::Next(ScrollType::Block, 1)),
-    (Modifiers::NONE, Key::P, Command::Previous(ScrollType::Block, 1)),
+    (
+        Modifiers::NONE,
+        Key::P,
+        Command::Previous(ScrollType::Block, 1),
+    ),
     (Modifiers::NONE, Key::T, Command::Top),
     (Modifiers::NONE, Key::Home, Command::Top),
     (Modifiers::NONE, Key::B, Command::Bottom),
     (Modifiers::NONE, Key::End, Command::Bottom),
     (Modifiers::NONE, Key::Plus, Command::Increment),
     (Modifiers::NONE, Key::Minus, Command::Decrement),
-    (Modifiers::NONE, Key::Slash, Command::Input(InputCommand::Enter)),
-    (Modifiers::NONE, Key::Backspace, Command::Input(InputCommand::Backspace)),
+    (
+        Modifiers::NONE,
+        Key::Slash,
+        Command::Input(InputCommand::Enter),
+    ),
+    (
+        Modifiers::NONE,
+        Key::Backspace,
+        Command::Input(InputCommand::Backspace),
+    ),
     (Modifiers::NONE, Key::Enter, Command::ShowDetails),
     (Modifiers::NONE, Key::O, Command::OpenRepo),
     (Modifiers::NONE, Key::R, Command::TraceCalls),
@@ -121,9 +181,21 @@ pub fn poll(ctx: &egui::Context, prompt_open: bool) -> Vec<Command> {
             }
         };
         if prompt_open {
-            press(Modifiers::NONE, Key::Escape, Command::Input(InputCommand::Exit));
-            press(Modifiers::NONE, Key::Enter, Command::Input(InputCommand::Confirm));
-            press(Modifiers::NONE, Key::Backspace, Command::Input(InputCommand::Backspace));
+            press(
+                Modifiers::NONE,
+                Key::Escape,
+                Command::Input(InputCommand::Exit),
+            );
+            press(
+                Modifiers::NONE,
+                Key::Enter,
+                Command::Input(InputCommand::Confirm),
+            );
+            press(
+                Modifiers::NONE,
+                Key::Backspace,
+                Command::Input(InputCommand::Backspace),
+            );
             input.events.retain(|event| match event {
                 Event::Text(text) => {
                     commands.push(Command::Input(InputCommand::Handle(text.clone())));

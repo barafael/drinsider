@@ -3,8 +3,8 @@
 
 use crate::elf::Property;
 use elf::{
-    endian::AnyEndian, gnu_symver::SymbolVersionTable, parse::ParsingTable,
-    string_table::StringTable, symbol::Symbol, ParseError,
+    ParseError, endian::AnyEndian, gnu_symver::SymbolVersionTable, parse::ParsingTable,
+    string_table::StringTable, symbol::Symbol,
 };
 use std::io::Error as IoError;
 

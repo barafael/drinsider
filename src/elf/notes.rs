@@ -1,7 +1,7 @@
 //! Ported from binsider (https://github.com/orhun/binsider),
 //! Copyright Orhun Parmaksız, MIT OR Apache-2.0.
 
-use elf::{endian::AnyEndian, note::Note as ElfNote, ElfBytes, ParseError};
+use elf::{ElfBytes, ParseError, endian::AnyEndian, note::Note as ElfNote};
 use std::fmt::Write;
 use std::io::Error as IoError;
 

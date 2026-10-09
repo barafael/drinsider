@@ -87,13 +87,19 @@ impl FileInfo {
 /// setuid, setgid and sticky like `stat(1)`.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn mode_string(mode: u32) -> String {
-    let bits = [0o400, 0o200, 0o100, 0o040, 0o020, 0o010, 0o004, 0o002, 0o001];
+    let bits = [
+        0o400, 0o200, 0o100, 0o040, 0o020, 0o010, 0o004, 0o002, 0o001,
+    ];
     let mut s: Vec<char> = bits
         .iter()
         .zip("rwxrwxrwx".chars())
         .map(|(bit, c)| if mode & bit != 0 { c } else { '-' })
         .collect();
-    for (special, index, set, unset) in [(0o4000, 2, 's', 'S'), (0o2000, 5, 's', 'S'), (0o1000, 8, 't', 'T')] {
+    for (special, index, set, unset) in [
+        (0o4000, 2, 's', 'S'),
+        (0o2000, 5, 's', 'S'),
+        (0o1000, 8, 't', 'T'),
+    ] {
         if mode & special != 0 {
             s[index] = if s[index] == 'x' { set } else { unset };
         }
@@ -143,9 +149,16 @@ mod native {
                 .ok()
                 .and_then(|uid| users().get_user_by_id(&uid))
                 .map(|v| v.name());
-            let group = groups().list().iter().find(|g| gid.as_ref() == Some(g.id())).map(|v| v.name());
+            let group = groups()
+                .list()
+                .iter()
+                .find(|g| gid.as_ref() == Some(g.id()))
+                .map(|v| v.name());
             Ok(Self {
-                name: path.file_name().map(|v| v.to_string_lossy().into_owned()).unwrap_or_default(),
+                name: path
+                    .file_name()
+                    .map(|v| v.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
                 size: ByteSize(metadata.len()).to_string(),
                 blocks: metadata.blocks().to_string(),
                 block_size: metadata.blksize().to_string(),
@@ -159,8 +172,11 @@ mod native {
                 accessed: format_time(metadata.accessed().ok().map(Into::into)),
                 modified: format_time(metadata.modified().ok().map(Into::into)),
                 changed: format_time(
-                    chrono::DateTime::from_timestamp(metadata.ctime(), metadata.ctime_nsec() as u32)
-                        .map(|t| t.with_timezone(&chrono::Local)),
+                    chrono::DateTime::from_timestamp(
+                        metadata.ctime(),
+                        metadata.ctime_nsec() as u32,
+                    )
+                    .map(|t| t.with_timezone(&chrono::Local)),
                 ),
                 created: format_time(metadata.created().ok().map(Into::into)),
             })

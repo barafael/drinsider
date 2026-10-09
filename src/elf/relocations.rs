@@ -3,9 +3,9 @@
 
 use crate::elf::Property;
 use elf::{
+    ElfBytes, ParseError,
     endian::AnyEndian,
     relocation::{Rel, Rela},
-    ElfBytes, ParseError,
 };
 use std::io::Error as IoError;
 

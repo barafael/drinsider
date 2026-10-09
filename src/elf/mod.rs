@@ -74,7 +74,8 @@ impl Info {
                 "Type", "Offset", "VirtAddr", "PhysAddr", "FileSiz", "MemSiz", "Flags", "Align",
             ],
             Info::SectionHeaders => &[
-                "Name", "Type", "Addr", "Offset", "Size", "EntSiz", "Flags", "Link", "Info", "Align",
+                "Name", "Type", "Addr", "Offset", "Size", "EntSiz", "Flags", "Link", "Info",
+                "Align",
             ],
             Info::Symbols => &["Name", "Type", "Value", "Siz", "Bind", "Vis", "Ndx"],
             Info::DynamicSymbols => &["Name", "Reqs", "Type", "Value", "Siz", "Bind", "Vis", "Ndx"],

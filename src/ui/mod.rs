@@ -30,7 +30,11 @@ pub fn row_height(ui: &Ui) -> f32 {
 /// Width of one monospace character.
 pub fn char_width(ui: &Ui) -> f32 {
     ui.painter()
-        .layout_no_wrap("0".into(), TextStyle::Monospace.resolve(ui.style()), Color32::PLACEHOLDER)
+        .layout_no_wrap(
+            "0".into(),
+            TextStyle::Monospace.resolve(ui.style()),
+            Color32::PLACEHOLDER,
+        )
         .size()
         .x
 }
@@ -40,8 +44,13 @@ pub fn char_width(ui: &Ui) -> f32 {
 pub fn section_bar(ui: &mut Ui, title: &str, right: &str, focused: bool) {
     let p = theme::of(ui);
     let height = ui.text_style_height(&TextStyle::Heading) + 8.0;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
-    let (bg, fg, sub) = if focused { (p.accent, p.on_accent, p.on_accent) } else { (p.surface, p.strong, p.weak) };
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
+    let (bg, fg, sub) = if focused {
+        (p.accent, p.on_accent, p.on_accent)
+    } else {
+        (p.surface, p.strong, p.weak)
+    };
     let painter = ui.painter();
     painter.rect_filled(rect, 0.0, bg);
     painter.text(
@@ -62,7 +71,13 @@ pub fn section_bar(ui: &mut Ui, title: &str, right: &str, focused: bool) {
 
 /// A row of tabs on a bar; returns the clicked one. On a focused bar the
 /// selected tab is drawn inverted so it still stands out.
-pub fn tab_strip(ui: &mut Ui, titles: &[&str], selected: usize, focused: bool, right: &str) -> Option<usize> {
+pub fn tab_strip(
+    ui: &mut Ui,
+    titles: &[&str],
+    selected: usize,
+    focused: bool,
+    right: &str,
+) -> Option<usize> {
     let p = theme::of(ui);
     let bar = if focused { p.accent } else { p.surface };
     let mut clicked = None;
@@ -83,7 +98,9 @@ pub fn tab_strip(ui: &mut Ui, titles: &[&str], selected: usize, focused: bool, r
                 let response = egui::Frame::NONE
                     .fill(bg)
                     .inner_margin(egui::Margin::symmetric(GAP as i8, 4))
-                    .show(ui, |ui| ui.add(Label::new(text).sense(Sense::CLICK).selectable(false)))
+                    .show(ui, |ui| {
+                        ui.add(Label::new(text).sense(Sense::CLICK).selectable(false))
+                    })
                     .inner;
                 if response.clicked() {
                     clicked = Some(i);
@@ -130,7 +147,10 @@ pub fn styled(ui: &Ui, text: &str, spans: &[(Range<usize>, Color32)], query: &st
     for pair in cuts.windows(2) {
         let (a, b) = (pair[0], pair[1]);
         let hit = hits.iter().any(|h| h.start <= a && b <= h.end);
-        let color = spans.iter().find(|(r, _)| r.start <= a && b <= r.end).map_or(base, |(_, c)| *c);
+        let color = spans
+            .iter()
+            .find(|(r, _)| r.start <= a && b <= r.end)
+            .map_or(base, |(_, c)| *c);
         job.append(
             &text[a..b],
             0.0,
@@ -169,20 +189,35 @@ pub fn render(state: &mut State, ui: &mut Ui) {
         .show(ui, |ui| render_status(state, ui));
     let Some(analyzer) = state.files.last() else {
         let message = state.fatal.as_deref().unwrap_or_default();
-        let hint = if cfg!(target_arch = "wasm32") { "\n\nDrop an ELF file here or press Ctrl+O." } else { "" };
-        centered_message(ui, RichText::new(format!("{message}{hint}")).color(ui.visuals().error_fg_color));
+        let hint = if cfg!(target_arch = "wasm32") {
+            "\n\nDrop an ELF file here or press Ctrl+O."
+        } else {
+            ""
+        };
+        centered_message(
+            ui,
+            RichText::new(format!("{message}{hint}")).color(ui.visuals().error_fg_color),
+        );
         return;
     };
     match state.tab {
         Tab::General => general::render(analyzer, &mut state.selection, &mut state.general, ui),
         Tab::StaticAnalysis => {
-            let clicked = static_analysis::render(analyzer, &mut state.selection, &mut state.static_, &state.search, ui);
+            let clicked = static_analysis::render(
+                analyzer,
+                &mut state.selection,
+                &mut state.static_,
+                &state.search,
+                ui,
+            );
             if let Some(index) = clicked {
                 state.select_info(index);
             }
         }
         Tab::DynamicAnalysis => dynamic::render(&mut state.dynamic, &state.search, ui),
-        Tab::Strings => strings::render(&mut state.selection, &mut state.strings, &state.search, ui),
+        Tab::Strings => {
+            strings::render(&mut state.selection, &mut state.strings, &state.search, ui)
+        }
         Tab::Hexdump => hexdump::render(analyzer, &mut state.hexdump, state.notice.as_deref(), ui),
     }
     if state.show_details {
@@ -192,9 +227,11 @@ pub fn render(state: &mut State, ui: &mut Ui) {
 
 /// Fills the body with one centered message.
 pub fn centered_message(ui: &mut Ui, text: RichText) {
-    egui::CentralPanel::default().frame(flat_panel(ui)).show(ui, |ui| {
-        ui.centered_and_justified(|ui| ui.label(text));
-    });
+    egui::CentralPanel::default()
+        .frame(flat_panel(ui))
+        .show(ui, |ui| {
+            ui.centered_and_justified(|ui| ui.label(text));
+        });
 }
 
 /// The details popup: the selected row as label/value pairs, or the trace summary.
@@ -208,7 +245,11 @@ fn render_details(state: &State, ui: &mut Ui) {
             .selected_row()
             .map(|row| {
                 let headers = state.static_.info().headers();
-                headers.iter().zip(row).map(|(h, v)| (h.to_string(), v.clone())).collect()
+                headers
+                    .iter()
+                    .zip(row)
+                    .map(|(h, v)| (h.to_string(), v.clone()))
+                    .collect()
             })
             .unwrap_or_default(),
         Tab::Strings => state
@@ -240,17 +281,25 @@ fn render_details(state: &State, ui: &mut Ui) {
             section_bar(ui, title, "Esc or Enter to close", true);
             egui::Frame::NONE.inner_margin(GAP).show(ui, |ui| {
                 if let Some(summary) = summary {
-                    egui::ScrollArea::both().max_height(screen.height() * 0.7).show(ui, |ui| {
-                        ui.monospace(summary);
-                    });
+                    egui::ScrollArea::both()
+                        .max_height(screen.height() * 0.7)
+                        .show(ui, |ui| {
+                            ui.monospace(summary);
+                        });
                 } else {
-                    egui::Grid::new("details_grid").num_columns(2).spacing([GAP * 2.0, 4.0]).show(ui, |ui| {
-                        for (label, value) in &rows {
-                            ui.label(RichText::new(label).color(p.label));
-                            ui.add(Label::new(RichText::new(value).monospace().color(p.strong)).wrap());
-                            ui.end_row();
-                        }
-                    });
+                    egui::Grid::new("details_grid")
+                        .num_columns(2)
+                        .spacing([GAP * 2.0, 4.0])
+                        .show(ui, |ui| {
+                            for (label, value) in &rows {
+                                ui.label(RichText::new(label).color(p.label));
+                                ui.add(
+                                    Label::new(RichText::new(value).monospace().color(p.strong))
+                                        .wrap(),
+                                );
+                                ui.end_row();
+                            }
+                        });
                 }
             });
         });
@@ -258,25 +307,36 @@ fn render_details(state: &State, ui: &mut Ui) {
 
 fn render_header(state: &mut State, ui: &mut Ui) {
     let p = theme::of(ui);
-    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(GAP as i8, 6)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("drinsider").heading().strong().color(p.accent));
-            ui.weak(env!("CARGO_PKG_VERSION"));
-            ui.add_space(GAP);
-            ui.label(RichText::new("Analyze ELF binaries like a normal person.").italics().color(p.weak));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // Breadcrumb of analyzed files, current one last.
-                let mut files = state.files.iter().rev();
-                if let Some(current) = files.next() {
-                    ui.monospace(RichText::new(current.path.to_string_lossy()).color(p.strong));
-                }
-                for earlier in files {
-                    ui.label(RichText::new("›").color(p.weak));
-                    ui.monospace(RichText::new(&earlier.file.name).color(p.weak));
-                }
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(GAP as i8, 6))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("drinsider")
+                        .heading()
+                        .strong()
+                        .color(p.accent),
+                );
+                ui.weak(env!("CARGO_PKG_VERSION"));
+                ui.add_space(GAP);
+                ui.label(
+                    RichText::new("Analyze ELF binaries like a normal person.")
+                        .italics()
+                        .color(p.weak),
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Breadcrumb of analyzed files, current one last.
+                    let mut files = state.files.iter().rev();
+                    if let Some(current) = files.next() {
+                        ui.monospace(RichText::new(current.path.to_string_lossy()).color(p.strong));
+                    }
+                    for earlier in files {
+                        ui.label(RichText::new("›").color(p.weak));
+                        ui.monospace(RichText::new(&earlier.file.name).color(p.weak));
+                    }
+                });
             });
         });
-    });
     let titles: Vec<&str> = Tab::ALL.iter().map(|t| t.title()).collect();
     if let Some(i) = tab_strip(ui, &titles, state.tab as usize, false, "") {
         state.select_tab(Tab::ALL[i]);
@@ -285,29 +345,43 @@ fn render_header(state: &mut State, ui: &mut Ui) {
 
 fn render_status(state: &State, ui: &mut Ui) {
     let p = theme::of(ui);
-    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(GAP as i8, 4)).show(ui, |ui| {
-        if let Some(notice) = &state.notice {
-            ui.label(RichText::new(notice).color(p.red).strong());
-        }
-        ui.horizontal_wrapped(|ui| {
-            // The open prompt, or the confirmed query that still filters the list.
-            let prompt = match state.prompt {
-                Some(Prompt::Search) => Some(("search", state.search.as_str(), true)),
-                Some(Prompt::Jump) => Some(("jump to", state.jump.as_str(), true)),
-                None if !state.search.is_empty() => Some(("search", state.search.as_str(), false)),
-                None => None,
-            };
-            if let Some((label, text, open)) = prompt {
-                ui.label(RichText::new(format!("{label}:")).color(p.label));
-                let text = RichText::new(format!(" {text}{} ", if open { "▏" } else { "" })).monospace();
-                ui.label(if open { text.color(p.on_accent).background_color(p.accent) } else { text.color(p.strong) });
-                ui.add_space(GAP * 2.0);
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(GAP as i8, 4))
+        .show(ui, |ui| {
+            if let Some(notice) = &state.notice {
+                ui.label(RichText::new(notice).color(p.red).strong());
             }
-            for (keys, desc) in state.key_bindings() {
-                ui.label(RichText::new(format!(" {keys} ")).monospace().color(p.accent).background_color(p.hover));
-                ui.label(RichText::new(desc).color(p.text));
-                ui.add_space(GAP);
-            }
+            ui.horizontal_wrapped(|ui| {
+                // The open prompt, or the confirmed query that still filters the list.
+                let prompt = match state.prompt {
+                    Some(Prompt::Search) => Some(("search", state.search.as_str(), true)),
+                    Some(Prompt::Jump) => Some(("jump to", state.jump.as_str(), true)),
+                    None if !state.search.is_empty() => {
+                        Some(("search", state.search.as_str(), false))
+                    }
+                    None => None,
+                };
+                if let Some((label, text, open)) = prompt {
+                    ui.label(RichText::new(format!("{label}:")).color(p.label));
+                    let text = RichText::new(format!(" {text}{} ", if open { "▏" } else { "" }))
+                        .monospace();
+                    ui.label(if open {
+                        text.color(p.on_accent).background_color(p.accent)
+                    } else {
+                        text.color(p.strong)
+                    });
+                    ui.add_space(GAP * 2.0);
+                }
+                for (keys, desc) in state.key_bindings() {
+                    ui.label(
+                        RichText::new(format!(" {keys} "))
+                            .monospace()
+                            .color(p.accent)
+                            .background_color(p.hover),
+                    );
+                    ui.label(RichText::new(desc).color(p.text));
+                    ui.add_space(GAP);
+                }
+            });
         });
-    });
 }

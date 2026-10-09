@@ -17,7 +17,10 @@ pub struct DrinsiderApp {
 
 impl DrinsiderApp {
     /// Wraps an initial state.
-    pub fn new(cc: &eframe::CreationContext<'_>, make_state: impl FnOnce(egui::Context) -> State) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        make_state: impl FnOnce(egui::Context) -> State,
+    ) -> Self {
         ui::install(&cc.egui_ctx);
         let (loaded_tx, loaded_rx) = mpsc::channel();
         Self {

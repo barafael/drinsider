@@ -118,7 +118,11 @@ mod tests {
         assert_eq!(line.text, "[42] read(3) = 0");
         assert_eq!(
             line.spans,
-            vec![(0..4, Tone::Cyan), (5..9, Tone::Strong), (15..16, Tone::Green)]
+            vec![
+                (0..4, Tone::Cyan),
+                (5..9, Tone::Strong),
+                (15..16, Tone::Green)
+            ]
         );
     }
 
