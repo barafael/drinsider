@@ -5,7 +5,7 @@
 
 use crate::analyzer::{Analyzer, Dependency};
 use crate::command::{Command, InputCommand, ScrollType};
-use crate::elf::{INFO_TABS, Info};
+use crate::elf::{INFO_TABS, Info, Property};
 use crate::list::{Scroll, Selection};
 use crate::strings::{Extraction, Found};
 use crate::tracer::{TraceData, TraceOptions, Traced};
@@ -159,8 +159,71 @@ pub struct StaticTab {
     pub headers_scroll: Scroll,
     /// Scroll offset of the notes block.
     pub notes_scroll: Scroll,
-    /// Rows of the current table after filtering.
+    /// Rows of the current table after filtering and sorting.
     pub rows: Vec<Vec<String>>,
+    /// Column the table is sorted by, if any.
+    pub sort: Option<Sort>,
+}
+
+/// A table sorted by one column.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sort {
+    /// Column index.
+    pub column: usize,
+    /// Largest first.
+    pub descending: bool,
+}
+
+impl Sort {
+    /// Clicking a header: ascending, then descending, then unsorted.
+    fn cycle(sort: Option<Sort>, column: usize) -> Option<Sort> {
+        match sort {
+            Some(Sort {
+                column: c,
+                descending: false,
+            }) if c == column => Some(Sort {
+                column,
+                descending: true,
+            }),
+            Some(Sort { column: c, .. }) if c == column => None,
+            _ => Some(Sort {
+                column,
+                descending: false,
+            }),
+        }
+    }
+
+    /// Orders `a` and `b` in this direction.
+    fn apply(self, ordering: std::cmp::Ordering) -> std::cmp::Ordering {
+        if self.descending {
+            ordering.reverse()
+        } else {
+            ordering
+        }
+    }
+}
+
+/// Compares table cells: by value if both are numbers (decimal, `0x` hex or
+/// a readable size such as `1.5 KiB`), numbers before text, otherwise as
+/// text ignoring case.
+fn compare_cells(a: &str, b: &str) -> std::cmp::Ordering {
+    fn number(cell: &str) -> Option<f64> {
+        let cell = cell.trim();
+        if let Some(hex) = cell.strip_prefix("0x") {
+            return u64::from_str_radix(hex, 16).ok().map(|n| n as f64);
+        }
+        cell.parse::<f64>().ok().or_else(|| {
+            cell.parse::<bytesize::ByteSize>()
+                .ok()
+                .map(|s| s.as_u64() as f64)
+        })
+    }
+    match (number(a), number(b)) {
+        (Some(x), Some(y)) => x.total_cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.to_lowercase().cmp(&b.to_lowercase()),
+    }
 }
 
 impl StaticTab {
@@ -203,8 +266,12 @@ pub struct StringsTab {
     pub min_length: usize,
     /// Extracted strings; `None` while extracting.
     pub found: Option<Vec<Found>>,
-    /// Indices into `found` after filtering.
+    /// Indices into `found` after filtering and sorting.
     pub rows: Vec<usize>,
+    /// Column the list is sorted by; unsorted is by location.
+    pub sort: Option<Sort>,
+    /// Digits of the widest location shown, to right-align them.
+    pub offset_digits: usize,
     /// Extraction in progress.
     pub pending: Option<Extraction>,
 }
@@ -253,6 +320,21 @@ pub struct HexdumpTab {
     pub big_endian: bool,
     /// Bytes per row; the renderer fits it to the window width, like heh.
     pub columns: usize,
+    /// Byte under the mouse pointer, highlighted in both panes.
+    pub hovered: Option<usize>,
+    /// Other end of the selected range, from visual mode or a mouse drag;
+    /// the cursor is the moving end.
+    pub anchor: Option<usize>,
+    /// A mouse drag is selecting bytes.
+    pub dragging: bool,
+}
+
+impl HexdumpTab {
+    /// The selected byte range, if any.
+    pub fn selection(&self) -> Option<std::ops::RangeInclusive<usize>> {
+        let (a, b) = (self.anchor?, self.cursor.index);
+        Some(a.min(b)..=a.max(b))
+    }
 }
 
 impl Default for HexdumpTab {
@@ -261,6 +343,9 @@ impl Default for HexdumpTab {
             cursor: Scroll::default(),
             big_endian: false,
             columns: HEX_COLS,
+            hovered: None,
+            anchor: None,
+            dragging: false,
         }
     }
 }
@@ -301,6 +386,8 @@ pub struct State {
     pub hexdump: HexdumpTab,
     /// Startup options.
     pub options: Options,
+    /// The last command and when it ran, for the status bar's key hints.
+    pub pressed: Option<(Command, f64)>,
     /// egui context, for repaints from worker threads.
     ctx: egui::Context,
 }
@@ -328,6 +415,7 @@ impl State {
             dynamic: DynamicTab::default(),
             hexdump: HexdumpTab::default(),
             options,
+            pressed: None,
             ctx,
         }
     }
@@ -378,6 +466,98 @@ impl State {
         self.strings.found.as_ref()?.get(index)
     }
 
+    /// Label/value rows of the details popup.
+    pub fn details(&self) -> Vec<(String, String)> {
+        match self.tab {
+            Tab::StaticAnalysis => self
+                .selected_row()
+                .map(|row| {
+                    let headers = self.static_.info().headers();
+                    headers
+                        .iter()
+                        .zip(row)
+                        .map(|(h, v)| (h.to_string(), v.clone()))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Tab::Strings => self
+                .selected_string()
+                .map(|(offset, s)| {
+                    vec![
+                        ("Location".into(), format!("{offset} ({offset:#x})")),
+                        ("String".into(), s.clone()),
+                    ]
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// What `y` copies: the open details popup, or the selection of the current tab.
+    pub fn selection_text(&self) -> Option<String> {
+        let analyzer = self.analyzer()?;
+        let lines = |rows: Vec<(String, String)>| {
+            let lines: Vec<String> = rows
+                .into_iter()
+                .map(|(label, value)| match value.is_empty() {
+                    true => label,
+                    false => format!("{label}: {value}"),
+                })
+                .collect();
+            (!lines.is_empty()).then(|| lines.join("\n"))
+        };
+        if self.show_details {
+            return match self.tab {
+                Tab::DynamicAnalysis => self.dynamic.data().map(|d| d.summary.clone()),
+                _ => lines(self.details()),
+            };
+        }
+        match self.tab {
+            Tab::General => self.selected_dependency().map(|d| match &d.path {
+                Some(path) => path.to_string_lossy().into_owned(),
+                None => d.name.clone(),
+            }),
+            Tab::StaticAnalysis => match self.static_.block {
+                Block::Table => self.selected_row().map(|row| row.join("\t")),
+                Block::Headers => lines(
+                    analyzer
+                        .elf
+                        .file_headers
+                        .items()
+                        .into_iter()
+                        .map(|row| (row[0].clone(), row[1].clone()))
+                        .collect(),
+                ),
+                Block::Notes => lines(analyzer.elf.notes.rows()),
+            },
+            Tab::Strings => self.selected_string().map(|(_, s)| s.clone()),
+            Tab::DynamicAnalysis => {
+                let data = self.dynamic.data()?;
+                let text: Vec<&str> = self
+                    .dynamic
+                    .lines
+                    .iter()
+                    .map(|&i| data.syscalls[i].text.as_str())
+                    .collect();
+                (!text.is_empty()).then(|| text.join("\n"))
+            }
+            // The selected bytes, or the one under the cursor, as hex.
+            Tab::Hexdump => {
+                let last = analyzer.bytes.len().checked_sub(1)?;
+                let cursor = self.hexdump.cursor.index.min(last);
+                let range = match self.hexdump.selection() {
+                    Some(range) => *range.start().min(&last)..=*range.end().min(&last),
+                    None => cursor..=cursor,
+                };
+                let hex: Vec<String> = analyzer.bytes[range]
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect();
+                Some(hex.join(" "))
+            }
+        }
+    }
+
     /// Key hints for the status bar.
     pub fn key_bindings(&self) -> Vec<(&'static str, &'static str)> {
         let bindings = self.native_key_bindings();
@@ -403,6 +583,7 @@ impl State {
                 ("Ctrl+O", "Open file"),
                 ("o", "Open docs"),
                 ("Enter", "Analyze lib"),
+                ("y", "Copy"),
                 ("j/k", "Select"),
                 ("h/l", "Scroll info"),
                 ("Tab", "Next"),
@@ -412,6 +593,7 @@ impl State {
             Tab::General => &[
                 ("o", "Open docs"),
                 ("Enter", "Analyze lib"),
+                ("y", "Copy"),
                 ("j/k", "Select"),
                 ("h/l", "Scroll info"),
                 ("Tab", "Next"),
@@ -421,6 +603,7 @@ impl State {
             ],
             Tab::StaticAnalysis => &[
                 ("Enter", "Details"),
+                ("y", "Copy"),
                 ("/", "Search"),
                 ("h/l", "Table"),
                 ("j/k", "Scroll"),
@@ -432,6 +615,7 @@ impl State {
             Tab::DynamicAnalysis => match self.dynamic.trace {
                 Trace::Done(_) => &[
                     ("Enter", "Summary"),
+                    ("y", "Copy"),
                     ("r", "Re-run"),
                     ("/", "Search"),
                     ("j/k", "Scroll"),
@@ -442,6 +626,7 @@ impl State {
             },
             Tab::Strings => &[
                 ("Enter", "Details"),
+                ("y", "Copy"),
                 ("+", "Longer"),
                 ("-", "Shorter"),
                 ("/", "Search"),
@@ -455,6 +640,8 @@ impl State {
                 ("/", "Search"),
                 ("n", "Endianness"),
                 ("h/j/k/l", "Move"),
+                ("v", "Visual"),
+                ("y", "Copy"),
                 ("Tab", "Next"),
                 ("q", "Quit"),
             ],
@@ -490,9 +677,22 @@ impl State {
     /// Runs a command and updates the state.
     pub fn run_command(&mut self, command: Command, ctx: &egui::Context) {
         self.notice = None;
+        self.pressed = Some((command.clone(), ctx.input(|i| i.time)));
         match command {
+            Command::Copy => {
+                match self.selection_text() {
+                    Some(text) => crate::ui::copy(ctx, text),
+                    None => self.notice = Some(String::from("Nothing to copy")),
+                }
+                // Yanking ends visual mode, as in vim.
+                self.hexdump.anchor = None;
+            }
             Command::Input(input) => self.input_command(input),
             Command::Exit if self.show_details => self.show_details = false,
+            // Like vim, Esc leaves visual mode first.
+            Command::Exit if self.tab == Tab::Hexdump && self.hexdump.anchor.is_some() => {
+                self.hexdump.anchor = None;
+            }
             // A browser tab cannot close itself; quitting would only blank the page.
             Command::Exit => self.running = cfg!(target_arch = "wasm32"),
             Command::Next(ScrollType::Tab, n) => self.select_tab(self.tab.next(n)),
@@ -705,6 +905,12 @@ impl State {
                 self.hexdump.big_endian = !self.hexdump.big_endian;
             }
             Command::Goto => self.prompt = Some(Prompt::Jump),
+            Command::Visual => {
+                self.hexdump.anchor = match self.hexdump.anchor {
+                    Some(_) => None,
+                    None => Some(cursor.index),
+                };
+            }
             _ => {}
         }
     }
@@ -743,7 +949,23 @@ impl State {
 
     /// Switches the Static tab's ELF table (mouse click on a sub-tab).
     pub fn select_info(&mut self, index: usize) {
-        self.static_.info_index = index % INFO_TABS.len();
+        let index = index % INFO_TABS.len();
+        if index != self.static_.info_index {
+            self.static_.sort = None;
+        }
+        self.static_.info_index = index;
+        self.handle_tab();
+    }
+
+    /// Sorts the Static table by a column (header click).
+    pub fn sort_static(&mut self, column: usize) {
+        self.static_.sort = Sort::cycle(self.static_.sort, column);
+        self.handle_tab();
+    }
+
+    /// Sorts the strings by location (0) or text (1) (header click).
+    pub fn sort_strings(&mut self, column: usize) {
+        self.strings.sort = Sort::cycle(self.strings.sort, column);
         self.handle_tab();
     }
 
@@ -770,15 +992,37 @@ impl State {
                     .into_iter()
                     .filter(|row| filter.matches(row.iter().map(String::as_str)))
                     .collect();
+                if let Some(sort) = self.static_.sort {
+                    let cell =
+                        |row: &Vec<String>| row.get(sort.column).cloned().unwrap_or_default();
+                    self.static_
+                        .rows
+                        .sort_by(|a, b| sort.apply(compare_cells(&cell(a), &cell(b))));
+                }
                 self.static_.rows.len()
             }
             Tab::Strings => {
-                self.strings.rows = match &self.strings.found {
-                    Some(found) => (0..found.len())
-                        .filter(|&i| filter.matches([found[i].1.as_str()]))
-                        .collect(),
-                    None => Vec::new(),
+                let Some(found) = &self.strings.found else {
+                    self.strings.rows.clear();
+                    self.selection = Selection::new(0);
+                    return;
                 };
+                let mut rows: Vec<usize> = (0..found.len())
+                    .filter(|&i| filter.matches([found[i].1.as_str()]))
+                    .collect();
+                match self.strings.sort {
+                    Some(sort) if sort.column == 1 => rows.sort_by(|&a, &b| {
+                        sort.apply(found[a].1.to_lowercase().cmp(&found[b].1.to_lowercase()))
+                    }),
+                    // Extraction yields ascending locations already.
+                    Some(Sort {
+                        descending: true, ..
+                    }) => rows.reverse(),
+                    _ => {}
+                }
+                let widest = rows.iter().map(|&i| found[i].0).max().unwrap_or(0);
+                self.strings.offset_digits = widest.to_string().len();
+                self.strings.rows = rows;
                 self.strings.rows.len()
             }
             Tab::DynamicAnalysis => {
@@ -1012,6 +1256,120 @@ mod tests {
         assert_eq!(state.static_.headers_scroll.index, 2);
         state.run_command(Command::Previous(ScrollType::Block, 1), &ctx());
         assert_eq!(state.static_.block, Block::Table);
+    }
+
+    #[test]
+    fn copy_takes_the_selection() {
+        let ctx = ctx();
+        let mut state = ls();
+        let path = state.selection_text().expect("a dependency is selected");
+        assert!(path.starts_with('/'), "{path}");
+
+        state.select_tab(Tab::StaticAnalysis);
+        let row = state.selected_row().expect("a row is selected").join("\t");
+        assert_eq!(state.selection_text(), Some(row));
+        state.run_command(Command::ShowDetails, &ctx);
+        let details = state.selection_text().expect("details");
+        assert!(
+            details.lines().count() > 1 && details.contains(": "),
+            "{details}"
+        );
+        state.run_command(Command::Exit, &ctx);
+        state.run_command(Command::Previous(ScrollType::Block, 1), &ctx);
+        let notes = state.selection_text().expect("notes");
+        assert!(notes.starts_with("Notes in "), "{notes}");
+
+        state.select_tab(Tab::Strings);
+        wait_for_strings(&mut state);
+        let string = state.selected_string().unwrap().1.clone();
+        assert_eq!(state.selection_text(), Some(string));
+
+        // The hexdump copies the byte under the cursor, or a visual selection.
+        state.select_tab(Tab::Hexdump);
+        assert_eq!(state.selection_text().as_deref(), Some("7F"));
+        state.run_command(Command::Visual, &ctx);
+        state.run_command(Command::Next(ScrollType::Table, 3), &ctx);
+        assert_eq!(state.hexdump.selection(), Some(0..=3));
+        assert_eq!(state.selection_text().as_deref(), Some("7F 45 4C 46"));
+        state.run_command(Command::Copy, &ctx);
+        assert_eq!(state.hexdump.selection(), None, "yank leaves visual mode");
+        state.run_command(Command::Visual, &ctx);
+        state.run_command(Command::Exit, &ctx);
+        assert!(state.running, "Esc leaves visual mode before quitting");
+        assert_eq!(state.hexdump.selection(), None);
+    }
+
+    #[test]
+    fn sorting_cycles_and_compares_values() {
+        let first = Sort::cycle(None, 2);
+        assert_eq!(
+            first,
+            Some(Sort {
+                column: 2,
+                descending: false
+            })
+        );
+        let second = Sort::cycle(first, 2);
+        assert_eq!(
+            second,
+            Some(Sort {
+                column: 2,
+                descending: true
+            })
+        );
+        assert_eq!(Sort::cycle(second, 2), None);
+        assert_eq!(
+            Sort::cycle(second, 0),
+            Some(Sort {
+                column: 0,
+                descending: false
+            })
+        );
+
+        use std::cmp::Ordering::{Greater, Less};
+        assert_eq!(compare_cells("0x9", "0x10"), Less);
+        assert_eq!(compare_cells("100", "20"), Greater);
+        assert_eq!(compare_cells("2.0 KiB", "900 B"), Greater);
+        assert_eq!(compare_cells("12", "abc"), Less);
+        assert_eq!(compare_cells("Beta", "alpha"), Greater);
+    }
+
+    #[test]
+    fn header_clicks_sort_tables() {
+        let mut state = ls();
+        state.select_tab(Tab::StaticAnalysis);
+        state.select_info(1); // Section headers.
+        let original = state.static_.rows.clone();
+        // Name column, descending after two clicks.
+        state.sort_static(0);
+        state.sort_static(0);
+        let names: Vec<&str> = state.static_.rows.iter().map(|r| r[0].as_str()).collect();
+        let mut expected = names.clone();
+        expected.sort_by(|a, b| compare_cells(b, a));
+        assert_eq!(names, expected);
+        state.sort_static(0);
+        assert_eq!(
+            state.static_.rows, original,
+            "third click restores the file order"
+        );
+        state.select_info(2);
+        assert_eq!(state.static_.sort, None, "another table starts unsorted");
+
+        state.select_tab(Tab::Strings);
+        wait_for_strings(&mut state);
+        state.sort_strings(1);
+        let found = state.strings.found.as_ref().unwrap();
+        let texts: Vec<String> = state
+            .strings
+            .rows
+            .iter()
+            .map(|&i| found[i].1.to_lowercase())
+            .collect();
+        assert!(texts.is_sorted());
+        state.sort_strings(0);
+        let found = state.strings.found.as_ref().unwrap();
+        let offsets: Vec<u64> = state.strings.rows.iter().map(|&i| found[i].0).collect();
+        assert!(offsets.is_sorted());
     }
 
     #[test]

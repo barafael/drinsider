@@ -1,35 +1,28 @@
 //! Static tab: file headers, notes, and the ELF tables with sub-tabs.
 
 use super::{
-    GAP, flat_panel, highlighted, on_selection, row_height, section_bar, tab_strip, theme,
+    Action, GAP, copyable, flat_panel, highlighted, on_selection, row_height, section_bar,
+    sort_header, tab_strip, theme,
 };
 use crate::analyzer::Analyzer;
+use crate::command::Command;
 use crate::elf::{INFO_TABS, Property};
 use crate::list::Selection;
 use crate::state::{Block, StaticTab};
 use egui::{Align, Layout, RichText, Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
-/// Renders the static analysis tab; returns the ELF table the user clicked, if any.
+/// Renders the static analysis tab; returns what the user clicked, if anything.
 pub fn render(
     analyzer: &Analyzer,
     selection: &mut Selection,
     view: &mut StaticTab,
     search: &str,
     ui: &mut Ui,
-) -> Option<usize> {
+) -> Option<Action> {
     let p = theme::of(ui);
     let headers = analyzer.elf.file_headers.items();
-    let notes: Vec<(String, String)> = analyzer
-        .elf
-        .notes
-        .inner
-        .iter()
-        .flat_map(|note| {
-            let section = std::iter::once((format!("Notes in {}", note.name), String::new()));
-            section.chain(note.header.iter().cloned().zip(note.text.iter().cloned()))
-        })
-        .collect();
+    let notes = analyzer.elf.notes.rows();
     let headers_scroll = view
         .headers_scroll
         .take_moved(headers.len())
@@ -61,7 +54,13 @@ pub fn render(
                                     let response = ui.label(
                                         RichText::new(format!("  {}", row[0])).color(p.label),
                                     );
-                                    ui.label(RichText::new(&row[1]).monospace().color(p.strong));
+                                    copyable(
+                                        ui,
+                                        egui::Label::new(
+                                            RichText::new(&row[1]).monospace().color(p.strong),
+                                        ),
+                                        &row[1],
+                                    );
                                     ui.end_row();
                                     if headers_scroll == Some(i) {
                                         response.scroll_to_me(Some(Align::TOP));
@@ -94,12 +93,18 @@ pub fn render(
                                     } else {
                                         ui.label(RichText::new(format!("  {label}")).color(p.label))
                                     };
-                                    ui.add(
-                                        egui::Label::new(
-                                            RichText::new(value).monospace().color(p.strong),
-                                        )
-                                        .truncate(),
-                                    );
+                                    if !value.is_empty() {
+                                        copyable(
+                                            ui,
+                                            egui::Label::new(
+                                                RichText::new(value).monospace().color(p.strong),
+                                            )
+                                            .truncate(),
+                                            value,
+                                        );
+                                    } else {
+                                        ui.label("");
+                                    }
                                     ui.end_row();
                                     if notes_scroll == Some(i) {
                                         response.scroll_to_me(Some(Align::TOP));
@@ -115,7 +120,8 @@ pub fn render(
     let info = view.info();
     let columns = info.headers();
     let rows = &view.rows;
-    let mut clicked_info = None;
+    let sort = view.sort;
+    let mut action = None;
     egui::CentralPanel::default()
         .frame(flat_panel(ui))
         .show(ui, |ui| {
@@ -124,13 +130,14 @@ pub fn render(
                 Some(s) => format!("{}/{}", s + 1, rows.len()),
                 None => format!("{} rows", rows.len()),
             };
-            clicked_info = tab_strip(
+            action = tab_strip(
                 ui,
                 &titles,
                 view.info_index,
                 focused == Block::Table,
                 &counter,
-            );
+            )
+            .map(Action::SelectInfo);
             if rows.is_empty() {
                 ui.label(RichText::new("  Nothing to show.").color(p.weak).italics());
                 return;
@@ -149,9 +156,11 @@ pub fn render(
             }
             table
                 .header(row_height, |mut header| {
-                    for column in columns {
+                    for (i, column) in columns.iter().enumerate() {
                         header.col(|ui| {
-                            ui.label(RichText::new(format!("  {column}")).strong().color(p.label));
+                            if sort_header(ui, &format!("  {column}"), sort, i) {
+                                action = Some(Action::SortStatic(i));
+                            }
                         });
                     }
                 })
@@ -165,14 +174,22 @@ pub fn render(
                                 if is_selected {
                                     on_selection(ui);
                                 }
-                                ui.label(highlighted(ui, &format!("  {cell}"), search));
+                                // Truncated cells show their full text on hover.
+                                ui.add(
+                                    egui::Label::new(highlighted(ui, &format!("  {cell}"), search))
+                                        .truncate(),
+                                );
                             });
                         }
-                        if row.response().clicked() {
+                        let response = row.response();
+                        if response.clicked() {
                             selection.select(i);
+                        }
+                        if response.double_clicked() {
+                            action = Some(Action::Run(Command::ShowDetails));
                         }
                     });
                 });
         });
-    clicked_info
+    action
 }

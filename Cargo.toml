@@ -7,7 +7,7 @@ description = "A windowed port of binsider: analyze ELF binaries like a normal p
 repository = "https://github.com/barafael/drinsider"
 
 [dependencies]
-eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts"] }
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "persistence"] }
 egui = "0.36.2"
 egui_extras = { version = "0.36.2", default-features = false }
 elf = "0.8.0"
@@ -25,6 +25,10 @@ console = "0.16"
 nix = { version = "0.30", features = ["ptrace", "signal", "process"] }
 
 # Browser build (trunk).
+# Desktop theme preference (winit reports none on Linux).
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5.19"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4"

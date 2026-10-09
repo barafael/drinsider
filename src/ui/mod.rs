@@ -7,12 +7,13 @@ mod static_analysis;
 mod strings;
 pub mod theme;
 
-use crate::state::{Prompt, State, Tab};
+use crate::command::{self, Command};
+use crate::state::{Prompt, Sort, State, Tab};
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Align, Align2, Color32, Label, Layout, RichText, Sense, TextStyle, Ui};
+use egui::{
+    Align, Align2, Color32, CursorIcon, Label, Layout, Response, RichText, Sense, TextStyle, Ui,
+};
 use std::ops::Range;
-
-pub use theme::install;
 
 /// Horizontal gap between unrelated items.
 const GAP: f32 = 10.0;
@@ -20,6 +21,90 @@ const GAP: f32 = 10.0;
 /// Panel frame without padding (the default panel frames add 8 px).
 pub fn flat_panel(ui: &Ui) -> egui::Frame {
     egui::Frame::NONE.fill(ui.visuals().panel_fill)
+}
+
+/// How long a key hint lights up after its command runs, in seconds.
+const PULSE: f64 = 0.4;
+
+/// How long the "Copied" confirmation stays in the status bar, in seconds.
+const TOAST: f64 = 1.8;
+
+fn toast_id() -> egui::Id {
+    egui::Id::new("copied_toast")
+}
+
+/// Copies `text` to the clipboard and confirms it in the status bar.
+pub fn copy(ctx: &egui::Context, text: String) {
+    let first_line = text.lines().next().unwrap_or_default();
+    let mut preview: String = first_line.chars().take(48).collect();
+    if preview.len() < text.len() {
+        preview.push('…');
+    }
+    let now = ctx.input(|i| i.time);
+    ctx.data_mut(|d| d.insert_temp(toast_id(), (format!("Copied {preview}"), now)));
+    ctx.copy_text(text);
+}
+
+/// A value in a label/value grid that copies `value` when clicked.
+pub fn copyable(ui: &mut Ui, label: Label, value: &str) -> Response {
+    let response = ui
+        .add(label.sense(Sense::CLICK))
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text("Click to copy");
+    if response.hovered() {
+        let rect = response.rect;
+        let stroke = egui::Stroke::new(1.0, theme::of(ui).accent);
+        ui.painter()
+            .hline(rect.x_range(), rect.bottom() - 1.0, stroke);
+    }
+    if response.clicked() {
+        copy(ui.ctx(), value.to_owned());
+    }
+    response
+}
+
+/// A mouse action inside a tab, applied once the tab is drawn.
+pub enum Action {
+    /// Run a command, as if its key was pressed.
+    Run(Command),
+    /// Switch the Static tab's ELF table.
+    SelectInfo(usize),
+    /// Sort the Static table by a column.
+    SortStatic(usize),
+    /// Sort the strings by a column.
+    SortStrings(usize),
+}
+
+/// A table header that sorts by its column when clicked, with an arrow
+/// on the sorted column.
+pub fn sort_header(ui: &mut Ui, title: &str, sort: Option<Sort>, column: usize) -> bool {
+    let p = theme::of(ui);
+    let arrow = match sort {
+        Some(sort) if sort.column == column && sort.descending => " ⏷",
+        Some(sort) if sort.column == column => " ⏶",
+        _ => "",
+    };
+    let response = ui
+        .add(
+            Label::new(
+                RichText::new(format!("{title}{arrow}"))
+                    .strong()
+                    .color(p.label),
+            )
+            .sense(Sense::CLICK)
+            .selectable(false),
+        )
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text("Click to sort");
+    if response.hovered() {
+        let stroke = egui::Stroke::new(1.0, p.label);
+        ui.painter().hline(
+            response.rect.x_range(),
+            response.rect.bottom() - 1.0,
+            stroke,
+        );
+    }
+    response.clicked()
 }
 
 /// Height of one table row.
@@ -179,14 +264,18 @@ pub fn on_selection(ui: &mut Ui) {
 }
 
 /// Renders the whole window.
-pub fn render(state: &mut State, ui: &mut Ui) {
+///
+/// Returns the command of a key hint the user clicked.
+pub fn render(state: &mut State, ui: &mut Ui) -> Option<Command> {
     egui::Panel::top("header")
         .frame(flat_panel(ui))
         .show_separator_line(false)
         .show(ui, |ui| render_header(state, ui));
-    egui::Panel::bottom("status")
+    let status = egui::Panel::bottom("status")
         .frame(flat_panel(ui))
         .show(ui, |ui| render_status(state, ui));
+    render_toast(ui, status.response.rect.height());
+    let clicked = status.inner;
     let Some(analyzer) = state.files.last() else {
         let message = state.fatal.as_deref().unwrap_or_default();
         let hint = if cfg!(target_arch = "wasm32") {
@@ -198,31 +287,41 @@ pub fn render(state: &mut State, ui: &mut Ui) {
             ui,
             RichText::new(format!("{message}{hint}")).color(ui.visuals().error_fg_color),
         );
-        return;
+        return clicked;
     };
-    match state.tab {
+    let action = match state.tab {
         Tab::General => general::render(analyzer, &mut state.selection, &mut state.general, ui),
-        Tab::StaticAnalysis => {
-            let clicked = static_analysis::render(
-                analyzer,
-                &mut state.selection,
-                &mut state.static_,
-                &state.search,
-                ui,
-            );
-            if let Some(index) = clicked {
-                state.select_info(index);
-            }
+        Tab::StaticAnalysis => static_analysis::render(
+            analyzer,
+            &mut state.selection,
+            &mut state.static_,
+            &state.search,
+            ui,
+        ),
+        Tab::DynamicAnalysis => {
+            dynamic::render(&mut state.dynamic, &state.search, ui);
+            None
         }
-        Tab::DynamicAnalysis => dynamic::render(&mut state.dynamic, &state.search, ui),
         Tab::Strings => {
             strings::render(&mut state.selection, &mut state.strings, &state.search, ui)
         }
-        Tab::Hexdump => hexdump::render(analyzer, &mut state.hexdump, state.notice.as_deref(), ui),
+        Tab::Hexdump => {
+            hexdump::render(analyzer, &mut state.hexdump, state.notice.as_deref(), ui);
+            None
+        }
+    };
+    let mut clicked = clicked;
+    match action {
+        Some(Action::Run(command)) => clicked = Some(command),
+        Some(Action::SelectInfo(index)) => state.select_info(index),
+        Some(Action::SortStatic(column)) => state.sort_static(column),
+        Some(Action::SortStrings(column)) => state.sort_strings(column),
+        None => {}
     }
     if state.show_details {
         render_details(state, ui);
     }
+    clicked
 }
 
 /// Fills the body with one centered message.
@@ -240,29 +339,7 @@ fn render_details(state: &State, ui: &mut Ui) {
         Tab::DynamicAnalysis => "Summary",
         _ => "Details",
     };
-    let rows: Vec<(String, String)> = match state.tab {
-        Tab::StaticAnalysis => state
-            .selected_row()
-            .map(|row| {
-                let headers = state.static_.info().headers();
-                headers
-                    .iter()
-                    .zip(row)
-                    .map(|(h, v)| (h.to_string(), v.clone()))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        Tab::Strings => state
-            .selected_string()
-            .map(|(offset, s)| {
-                vec![
-                    ("Location".into(), format!("{offset} ({offset:#x})")),
-                    ("String".into(), s.clone()),
-                ]
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    };
+    let rows = state.details();
     let summary = match state.tab {
         Tab::DynamicAnalysis => state.dynamic.data().map(|d| d.summary.clone()),
         _ => None,
@@ -293,9 +370,11 @@ fn render_details(state: &State, ui: &mut Ui) {
                         .show(ui, |ui| {
                             for (label, value) in &rows {
                                 ui.label(RichText::new(label).color(p.label));
-                                ui.add(
+                                copyable(
+                                    ui,
                                     Label::new(RichText::new(value).monospace().color(p.strong))
                                         .wrap(),
+                                    value,
                                 );
                                 ui.end_row();
                             }
@@ -325,6 +404,8 @@ fn render_header(state: &mut State, ui: &mut Ui) {
                         .color(p.weak),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    theme_menu(ui);
+                    ui.add_space(GAP * 2.0);
                     // Breadcrumb of analyzed files, current one last.
                     let mut files = state.files.iter().rev();
                     if let Some(current) = files.next() {
@@ -343,8 +424,106 @@ fn render_header(state: &mut State, ui: &mut Ui) {
     }
 }
 
-fn render_status(state: &State, ui: &mut Ui) {
+/// The theme menu. Mouse only: binsider's keymap has no key for it.
+fn theme_menu(ui: &mut Ui) {
     let p = theme::of(ui);
+    let response = ui
+        .add(
+            Label::new(RichText::new("🎨 Theme").color(p.weak))
+                .sense(Sense::CLICK)
+                .selectable(false),
+        )
+        .on_hover_cursor(CursorIcon::PointingHand);
+    let before = theme::current(ui.ctx());
+    let mut settings = before;
+    let frame = egui::Frame::popup(ui.style())
+        .corner_radius(0.0)
+        .inner_margin(0.0)
+        .stroke(egui::Stroke::new(1.0, p.accent));
+    egui::Popup::menu(&response)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .frame(frame)
+        .width(240.0)
+        .show(|ui| {
+            let dark = ui.visuals().dark_mode;
+            section_bar(ui, "Mode", "", false);
+            egui::Frame::NONE.inner_margin(GAP / 2.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    use egui::ThemePreference::{Dark, Light, System};
+                    for (mode, name) in [(System, "System"), (Light, "Light"), (Dark, "Dark")] {
+                        if choice(ui, name, settings.mode == mode).clicked() {
+                            settings.mode = mode;
+                        }
+                    }
+                });
+            });
+            section_bar(ui, "Palette", "", false);
+            egui::Frame::NONE.inner_margin(GAP / 2.0).show(ui, |ui| {
+                for family in theme::Family::ALL {
+                    ui.horizontal(|ui| {
+                        // A preview of the variant the current mode shows.
+                        let palette = family.palette(dark);
+                        for color in [palette.bg, palette.accent, palette.label, palette.green] {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(12.0, 12.0), Sense::hover());
+                            ui.painter().rect_filled(rect, 0.0, color);
+                            ui.painter().rect_stroke(
+                                rect,
+                                0.0,
+                                egui::Stroke::new(1.0, p.border),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                        ui.add_space(GAP / 2.0);
+                        if choice(ui, family.name(), settings.family == family).clicked() {
+                            settings.family = family;
+                        }
+                    });
+                }
+            });
+        });
+    if settings != before {
+        theme::install(ui.ctx(), settings);
+    }
+}
+
+/// A clickable menu choice, filled with the accent when selected.
+fn choice(ui: &mut Ui, text: &str, selected: bool) -> Response {
+    let p = theme::of(ui);
+    let (bg, fg) = if selected {
+        (p.accent, p.on_accent)
+    } else {
+        (Color32::TRANSPARENT, p.text)
+    };
+    let response = egui::Frame::NONE
+        .fill(bg)
+        .inner_margin(egui::Margin::symmetric(8, 2))
+        .show(ui, |ui| {
+            ui.add(
+                Label::new(RichText::new(text).color(fg))
+                    .sense(Sense::CLICK)
+                    .selectable(false),
+            )
+        })
+        .inner
+        .on_hover_cursor(CursorIcon::PointingHand);
+    if response.hovered() && !selected {
+        let stroke = egui::Stroke::new(1.0, p.text);
+        ui.painter().hline(
+            response.rect.x_range(),
+            response.rect.bottom() - 1.0,
+            stroke,
+        );
+    }
+    response
+}
+
+/// The status bar: notice, prompt and key hints. A hint lights up when its
+/// command runs and, if it stands for one command, can be clicked to run it.
+fn render_status(state: &State, ui: &mut Ui) -> Option<Command> {
+    let p = theme::of(ui);
+    let now = ui.input(|i| i.time);
+    let mut clicked = None;
     egui::Frame::NONE
         .inner_margin(egui::Margin::symmetric(GAP as i8, 4))
         .show(ui, |ui| {
@@ -373,15 +552,83 @@ fn render_status(state: &State, ui: &mut Ui) {
                     ui.add_space(GAP * 2.0);
                 }
                 for (keys, desc) in state.key_bindings() {
-                    ui.label(
-                        RichText::new(format!(" {keys} "))
-                            .monospace()
-                            .color(p.accent)
-                            .background_color(p.hover),
+                    let commands = command::hinted(keys);
+                    let pulse = state
+                        .pressed
+                        .as_ref()
+                        .filter(|(pressed, _)| {
+                            commands.iter().any(|c| command::same_action(c, pressed))
+                        })
+                        .map_or(0.0, |(_, at)| 1.0 - ((now - at) / PULSE).clamp(0.0, 1.0));
+                    if pulse > 0.0 {
+                        ui.ctx().request_repaint();
+                    }
+                    let pulse = pulse as f32;
+                    // Clicking stands in for the key, so not while typing into the prompt.
+                    let clickable = commands.len() == 1 && state.prompt.is_none();
+                    let sense = if clickable {
+                        Sense::CLICK
+                    } else {
+                        Sense::hover()
+                    };
+                    let key = ui.add(
+                        Label::new(
+                            RichText::new(format!(" {keys} "))
+                                .monospace()
+                                .color(p.accent.lerp_to_gamma(p.on_accent, pulse))
+                                .background_color(p.hover.lerp_to_gamma(p.accent, pulse)),
+                        )
+                        .sense(sense),
                     );
-                    ui.label(RichText::new(desc).color(p.text));
+                    let text = ui.add(Label::new(RichText::new(desc).color(p.text)).sense(sense));
+                    if clickable {
+                        let hovered = key.hovered() || text.hovered();
+                        if hovered {
+                            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                            let stroke = egui::Stroke::new(1.0, p.text);
+                            ui.painter().hline(
+                                text.rect.x_range(),
+                                text.rect.bottom() - 1.0,
+                                stroke,
+                            );
+                        }
+                        if key.clicked() || text.clicked() {
+                            clicked = commands.into_iter().next();
+                        }
+                    }
                     ui.add_space(GAP);
                 }
             });
+        });
+    clicked
+}
+
+/// The "Copied" confirmation, floating above the status bar for a moment.
+fn render_toast(ui: &Ui, status_height: f32) {
+    let now = ui.input(|i| i.time);
+    let Some((message, at)) = ui.ctx().data(|d| d.get_temp::<(String, f64)>(toast_id())) else {
+        return;
+    };
+    let age = now - at;
+    if age >= TOAST {
+        return;
+    }
+    ui.ctx().request_repaint();
+    let p = theme::of(ui);
+    // Fade out over the last third.
+    let opacity = ((TOAST - age) / (TOAST / 3.0)).clamp(0.0, 1.0) as f32;
+    egui::Area::new(toast_id())
+        .anchor(Align2::RIGHT_BOTTOM, [-GAP, -(status_height + GAP)])
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .show(ui.ctx(), |ui| {
+            ui.set_opacity(opacity);
+            egui::Frame::NONE
+                .fill(p.surface)
+                .stroke(egui::Stroke::new(1.0, p.green))
+                .inner_margin(egui::Margin::symmetric(GAP as i8, 4))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(format!("✔ {message}")).color(p.green));
+                });
         });
 }

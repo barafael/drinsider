@@ -23,6 +23,20 @@ pub struct Notes {
     pub inner: Vec<Note>,
 }
 
+impl Notes {
+    /// Label/value rows; each section starts with a `Notes in <section>`
+    /// row whose value is empty.
+    pub fn rows(&self) -> Vec<(String, String)> {
+        self.inner
+            .iter()
+            .flat_map(|note| {
+                let section = std::iter::once((format!("Notes in {}", note.name), String::new()));
+                section.chain(note.header.iter().cloned().zip(note.text.iter().cloned()))
+            })
+            .collect()
+    }
+}
+
 impl<'a> TryFrom<&'a ElfBytes<'a, AnyEndian>> for Notes {
     type Error = ParseError;
     fn try_from(elf: &'a ElfBytes<'a, AnyEndian>) -> Result<Self, Self::Error> {

@@ -1,14 +1,23 @@
 //! Strings tab: printable sequences found in the file.
 
-use super::{flat_panel, highlighted, on_selection, row_height, section_bar, theme};
+use super::{
+    Action, flat_panel, highlighted, on_selection, row_height, section_bar, sort_header, theme,
+};
+use crate::command::Command;
 use crate::list::Selection;
 use crate::state::StringsTab;
 use egui::{Align, Layout, RichText, Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
-/// Renders the strings tab.
-pub fn render(selection: &mut Selection, view: &mut StringsTab, search: &str, ui: &mut Ui) {
+/// Renders the strings tab; returns what the user clicked, if anything.
+pub fn render(
+    selection: &mut Selection,
+    view: &mut StringsTab,
+    search: &str,
+    ui: &mut Ui,
+) -> Option<Action> {
     let p = theme::of(ui);
+    let mut action = None;
     let selected = selection.selected;
     let scroll_to = selection.take_moved().then_some(selected).flatten();
     egui::CentralPanel::default()
@@ -49,13 +58,9 @@ pub fn render(selection: &mut Selection, view: &mut StringsTab, search: &str, ui
                 return;
             }
             let row_height = row_height(ui);
-            // binsider prints decimal offsets, right-aligned; they ascend, so the last is widest.
-            let digits = view
-                .rows
-                .last()
-                .map_or(0, |&i| found[i].0)
-                .to_string()
-                .len();
+            // binsider prints decimal offsets, right-aligned.
+            let digits = view.offset_digits;
+            let sort = view.sort;
             let mut table = TableBuilder::new(ui)
                 .id_salt("strings")
                 .striped(true)
@@ -69,12 +74,13 @@ pub fn render(selection: &mut Selection, view: &mut StringsTab, search: &str, ui
             }
             table
                 .header(row_height, |mut header| {
-                    header.col(|ui| {
-                        ui.label(RichText::new("  Location").strong().color(p.label));
-                    });
-                    header.col(|ui| {
-                        ui.label(RichText::new("String").strong().color(p.label));
-                    });
+                    for (i, title) in ["  Location", "String"].into_iter().enumerate() {
+                        header.col(|ui| {
+                            if sort_header(ui, title, sort, i) {
+                                action = Some(Action::SortStrings(i));
+                            }
+                        });
+                    }
                 })
                 .body(|body| {
                     body.rows(row_height, view.rows.len(), |mut row| {
@@ -98,12 +104,20 @@ pub fn render(selection: &mut Selection, view: &mut StringsTab, search: &str, ui
                                 .chars()
                                 .map(|c| if c.is_whitespace() { ' ' } else { c })
                                 .collect();
-                            ui.label(highlighted(ui, &single_line, search));
+                            // Truncated strings show in full on hover.
+                            ui.add(
+                                egui::Label::new(highlighted(ui, &single_line, search)).truncate(),
+                            );
                         });
-                        if row.response().clicked() {
+                        let response = row.response();
+                        if response.clicked() {
                             selection.select(i);
+                        }
+                        if response.double_clicked() {
+                            action = Some(Action::Run(Command::ShowDetails));
                         }
                     });
                 });
         });
+    action
 }

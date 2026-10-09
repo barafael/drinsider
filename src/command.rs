@@ -45,6 +45,10 @@ pub enum Command {
     HumanReadable,
     /// Jump to an offset (hexdump).
     Goto,
+    /// Copy the selected value to the clipboard.
+    Copy,
+    /// Start or end selecting a range (hexdump visual mode).
+    Visual,
     /// Pick a file to analyze (browser only).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     OpenFile,
@@ -162,6 +166,8 @@ const BINDINGS: &[(Modifiers, Key, Command)] = &[
     (Modifiers::NONE, Key::R, Command::TraceCalls),
     (Modifiers::NONE, Key::S, Command::HumanReadable),
     (Modifiers::NONE, Key::G, Command::Goto),
+    (Modifiers::NONE, Key::Y, Command::Copy),
+    (Modifiers::NONE, Key::V, Command::Visual),
     (Modifiers::NONE, Key::Q, Command::Exit),
     (Modifiers::NONE, Key::Escape, Command::Exit),
 ];
@@ -238,6 +244,13 @@ impl Keys {
                     _ => None,
                 }
                 .filter(|_| modifiers.matches_logically(Modifiers::NONE)),
+                // A held Escape must not run on from closing something into quitting.
+                Event::Key {
+                    key,
+                    repeat: true,
+                    modifiers,
+                    ..
+                } if binding(key, modifiers) == Some(Command::Exit) => None,
                 Event::Key { key, modifiers, .. } => {
                     let command = binding(key, modifiers);
                     self.command_key =
@@ -251,6 +264,38 @@ impl Keys {
             }
         }
         None
+    }
+}
+
+/// The commands a status bar hint such as `j/k`, `/`, `Shift+Tab` or
+/// `Ctrl+O` stands for.
+pub fn hinted(keys: &str) -> Vec<Command> {
+    let tokens: Vec<&str> = if keys == "/" {
+        vec![keys]
+    } else {
+        keys.split('/').collect()
+    };
+    tokens
+        .into_iter()
+        .filter_map(|token| {
+            let (modifiers, key) = match token {
+                "Shift+Tab" => (Modifiers::SHIFT, Key::Tab),
+                "Ctrl+O" => (Modifiers::COMMAND, Key::O),
+                "Bksp" => (Modifiers::NONE, Key::Backspace),
+                key => (Modifiers::NONE, Key::from_name(key)?),
+            };
+            binding(key, modifiers)
+        })
+        .collect()
+}
+
+/// Whether two commands are the same action, whatever the step size:
+/// `j`, Down and PageDown all move the list forward.
+pub fn same_action(a: &Command, b: &Command) -> bool {
+    match (a, b) {
+        (Command::Next(x, _), Command::Next(y, _))
+        | (Command::Previous(x, _), Command::Previous(y, _)) => x == y,
+        _ => a == b,
     }
 }
 
@@ -352,6 +397,52 @@ mod tests {
                 Command::Input(InputCommand::Backspace),
                 typed("c")
             ]
+        );
+    }
+
+    #[test]
+    fn hints_name_their_commands() {
+        assert_eq!(
+            hinted("j/k"),
+            [
+                Command::Next(ScrollType::List, 1),
+                Command::Previous(ScrollType::List, 1)
+            ]
+        );
+        assert_eq!(hinted("/"), [Command::Input(InputCommand::Enter)]);
+        assert_eq!(hinted("Shift+Tab"), [Command::Previous(ScrollType::Tab, 1)]);
+        assert_eq!(hinted("Bksp"), [Command::Input(InputCommand::Backspace)]);
+        assert_eq!(hinted("y"), [Command::Copy]);
+        assert!(same_action(
+            &Command::Next(ScrollType::List, 5),
+            &Command::Next(ScrollType::List, 1)
+        ));
+        assert!(!same_action(
+            &Command::Next(ScrollType::List, 1),
+            &Command::Next(ScrollType::Table, 1)
+        ));
+    }
+
+    #[test]
+    fn held_escape_does_not_repeat() {
+        let repeat = Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: Modifiers::NONE,
+        };
+        let held_j = Event::Key {
+            key: Key::J,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: Modifiers::NONE,
+        };
+        let commands = run(vec![key(Key::Escape, Modifiers::NONE), repeat, held_j]);
+        assert_eq!(
+            commands,
+            [Command::Exit, Command::Next(ScrollType::List, 1)]
         );
     }
 

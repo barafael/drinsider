@@ -1,14 +1,21 @@
 //! General tab: file information and dependencies.
 
-use super::{GAP, flat_panel, on_selection, row_height, section_bar, theme};
+use super::{Action, GAP, copyable, flat_panel, on_selection, row_height, section_bar, theme};
 use crate::analyzer::Analyzer;
+use crate::command::Command;
 use crate::list::Selection;
 use crate::state::GeneralTab;
-use egui::{Align, Layout, RichText, Sense, Ui};
+use egui::{Align, Label, Layout, RichText, Sense, Ui};
 use egui_extras::{Column, TableBuilder};
 
-/// Renders the general tab.
-pub fn render(analyzer: &Analyzer, selection: &mut Selection, view: &mut GeneralTab, ui: &mut Ui) {
+/// Renders the general tab; returns what the user clicked, if anything.
+pub fn render(
+    analyzer: &Analyzer,
+    selection: &mut Selection,
+    view: &mut GeneralTab,
+    ui: &mut Ui,
+) -> Option<Action> {
+    let mut action = None;
     let p = theme::of(ui);
     let file = &analyzer.file;
     let lines = file.rows();
@@ -44,7 +51,11 @@ pub fn render(analyzer: &Analyzer, selection: &mut Selection, view: &mut General
                             for (i, (label, value)) in lines.iter().enumerate() {
                                 let response =
                                     ui.label(RichText::new(format!("  {label}")).color(p.label));
-                                ui.label(RichText::new(*value).monospace().color(p.strong));
+                                copyable(
+                                    ui,
+                                    Label::new(RichText::new(*value).monospace().color(p.strong)),
+                                    value,
+                                );
                                 ui.end_row();
                                 // h/l move the panel by whole rows; the mouse wheel still works in between.
                                 if scroll_to == Some(i) {
@@ -112,9 +123,10 @@ pub fn render(analyzer: &Analyzer, selection: &mut Selection, view: &mut General
                                 on_selection(ui);
                             }
                             match &dependency.path {
-                                Some(path) => {
-                                    ui.label(RichText::new(path.to_string_lossy()).monospace())
-                                }
+                                Some(path) => ui.add(
+                                    Label::new(RichText::new(path.to_string_lossy()).monospace())
+                                        .truncate(),
+                                ),
                                 None if analyzer.resolved => {
                                     let text = RichText::new("not found").italics();
                                     ui.label(if is_selected { text } else { text.color(p.red) })
@@ -126,10 +138,16 @@ pub fn render(analyzer: &Analyzer, selection: &mut Selection, view: &mut General
                                 ),
                             };
                         });
-                        if row.response().clicked() {
+                        let response = row.response();
+                        if response.clicked() {
                             selection.select(i);
+                        }
+                        // Like Enter: analyze the library.
+                        if response.double_clicked() {
+                            action = Some(Action::Run(Command::ShowDetails));
                         }
                     });
                 });
         });
+    action
 }

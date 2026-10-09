@@ -1,11 +1,11 @@
 //! Hexdump tab: heh's layout (address, hex and ASCII panes with a grid of
 //! decoded values below) as a read-only viewer.
 
-use super::{GAP, char_width, flat_panel, row_height, section_bar, theme};
+use super::{GAP, char_width, copyable, flat_panel, row_height, section_bar, theme};
 use crate::analyzer::Analyzer;
 use crate::state::HexdumpTab;
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Align, Color32, Layout, RichText, Sense, TextStyle, Ui};
+use egui::{Align, Color32, CursorIcon, Label, Layout, RichText, Sense, TextStyle, Ui};
 use egui_extras::{Column, TableBuilder};
 use theme::Palette;
 
@@ -20,6 +20,25 @@ fn glyph(byte: u8, p: &Palette) -> (char, Color32) {
         // heh prints U+FFFD, which egui's bundled fonts lack.
         _ => ('♦', p.yellow),
     }
+}
+
+/// Shows one row of the hex or ASCII pane and returns the byte (counted
+/// from the row start) under the pointer.
+///
+/// This goes by the pointer position rather than hovering, because while a
+/// drag that started on another row is selecting, nothing else is hovered.
+fn byte_cells(ui: &mut Ui, job: LayoutJob, glyphs_per_byte: usize) -> Option<usize> {
+    let galley = ui.painter().layout_job(job);
+    let response = ui.add(Label::new(galley.clone()).sense(Sense::CLICK));
+    let pointer = ui.input(|i| i.pointer.interact_pos())?;
+    if !response.rect.contains(pointer) || !ui.clip_rect().contains(pointer) {
+        return None;
+    }
+    let x = pointer.x - response.rect.left();
+    let glyphs = &galley.rows.first()?.row.glyphs;
+    let glyph = glyphs.iter().position(|g| x < g.max_x())?;
+    response.on_hover_cursor(CursorIcon::PointingHand);
+    Some(glyph / glyphs_per_byte)
 }
 
 /// Renders the hexdump tab.
@@ -38,12 +57,19 @@ pub fn render(analyzer: &Analyzer, view: &mut HexdumpTab, notice: Option<&str>, 
     egui::CentralPanel::default()
         .frame(flat_panel(ui))
         .show(ui, |ui| {
-            section_bar(
-                ui,
-                "Hexdump",
-                &format!("{cursor:#X} / {:#X}", bytes.len()),
-                false,
-            );
+            let selection = view.selection();
+            let position = match &selection {
+                Some(range) => format!(
+                    "{}{:#X}–{:#X} ({} bytes)    {cursor:#X} / {:#X}",
+                    if view.dragging { "" } else { "VISUAL  " },
+                    range.start(),
+                    range.end(),
+                    range.end() - range.start() + 1,
+                    bytes.len()
+                ),
+                None => format!("{cursor:#X} / {:#X}", bytes.len()),
+            };
+            section_bar(ui, "Hexdump", &position, selection.is_some());
             // Fit as many bytes per row as the width allows: 3 characters of hex
             // plus 1 of ASCII per byte, after a 10-character address column.
             let cw = char_width(ui);
@@ -71,6 +97,10 @@ pub fn render(analyzer: &Analyzer, view: &mut HexdumpTab, notice: Option<&str>, 
             if moved {
                 table = table.scroll_to_row(cursor / columns, None);
             }
+            let hovered = view.hovered;
+            let mut under_pointer = None;
+            let mut row_clicked = None;
+            let selected = |at: usize| selection.as_ref().is_some_and(|r| r.contains(&at));
             table
                 .header(row_height, |mut header| {
                     for title in ["  Address", "Hex", "ASCII"] {
@@ -97,8 +127,12 @@ pub fn render(analyzer: &Analyzer, view: &mut HexdumpTab, notice: Option<&str>, 
                         let mut ascii = LayoutJob::default();
                         for (i, &byte) in chunk.iter().enumerate() {
                             let (escape, color) = glyph(byte, p);
-                            let (fg, bg) = if on_row && start + i == cursor {
+                            let (fg, bg) = if start + i == cursor {
                                 (p.on_accent, p.accent)
+                            } else if selected(start + i) {
+                                (p.strong, p.bg.lerp_to_gamma(p.accent, 0.35))
+                            } else if hovered == Some(start + i) {
+                                (p.strong, p.hover)
                             } else {
                                 (color, Color32::TRANSPARENT)
                             };
@@ -106,17 +140,49 @@ pub fn render(analyzer: &Analyzer, view: &mut HexdumpTab, notice: Option<&str>, 
                             hex.append(" ", 0.0, format(p.text, Color32::TRANSPARENT));
                             ascii.append(&escape.to_string(), 0.0, format(fg, bg));
                         }
-                        row.col(|ui| {
-                            ui.label(hex);
-                        });
-                        row.col(|ui| {
-                            ui.label(ascii);
-                        });
-                        if row.response().clicked() {
-                            view.cursor.jump(start);
+                        let mut on_byte = None;
+                        row.col(|ui| on_byte = on_byte.or(byte_cells(ui, hex, 3)));
+                        row.col(|ui| on_byte = on_byte.or(byte_cells(ui, ascii, 1)));
+                        match on_byte {
+                            Some(i) => under_pointer = Some(start + i),
+                            // Clicking the address picks the row's first byte.
+                            None if row.response().clicked() => row_clicked = Some(start),
+                            None => {}
                         }
                     });
                 });
+            // Pressing on a byte moves the cursor there; dragging selects
+            // from that byte to the one under the pointer.
+            let (pressed, down) =
+                ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
+            let before = (view.cursor.index, view.anchor, view.dragging);
+            if pressed && let Some(at) = under_pointer {
+                view.cursor.jump(at);
+                view.anchor = Some(at);
+                view.dragging = true;
+            } else if view.dragging && down {
+                if let Some(at) = under_pointer.filter(|&at| at != view.cursor.index) {
+                    view.cursor.jump(at);
+                }
+            } else if let Some(at) = row_clicked {
+                view.cursor.jump(at);
+                view.anchor = None;
+            }
+            if view.dragging && !down {
+                view.dragging = false;
+                // A click without a drag selects nothing.
+                if view.anchor == Some(view.cursor.index) {
+                    view.anchor = None;
+                }
+            }
+            // The hover highlight is drawn from the last frame's pointer position.
+            let hovered_now = under_pointer.filter(|_| !view.dragging);
+            if view.hovered != hovered_now
+                || before != (view.cursor.index, view.anchor, view.dragging)
+            {
+                view.hovered = hovered_now;
+                ui.ctx().request_repaint();
+            }
         });
 }
 
@@ -186,10 +252,14 @@ fn render_values(bytes: &[u8], cursor: usize, big_endian: bool, notice: Option<&
                 .show(ui, |ui| {
                     for (label, value) in column {
                         ui.label(RichText::new(format!("  {label}")).color(p.label));
-                        ui.add(
+                        let text =
                             egui::Label::new(RichText::new(value).monospace().color(p.strong))
-                                .truncate(),
-                        );
+                                .truncate();
+                        if *label == "Notifications" || value == "–" {
+                            ui.add(text);
+                        } else {
+                            copyable(ui, text, value);
+                        }
                         ui.end_row();
                     }
                 });

@@ -7,7 +7,11 @@ mod command;
 mod elf;
 mod error;
 mod file;
+#[cfg(not(target_arch = "wasm32"))]
+mod geometry;
 mod list;
+#[cfg(target_os = "linux")]
+mod portal;
 mod state;
 mod strings;
 mod tracer;
@@ -29,21 +33,30 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let saved = geometry::Geometry::load();
+    let viewport = egui::ViewportBuilder::default()
+        .with_title("drinsider")
+        .with_app_id("drinsider")
+        .with_inner_size([1280.0, 860.0])
+        .with_min_inner_size([720.0, 480.0]);
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("drinsider")
-            .with_app_id("drinsider")
-            .with_inner_size([1280.0, 860.0])
-            .with_min_inner_size([720.0, 480.0]),
+        viewport: match saved {
+            Some(geometry) => geometry.apply(viewport),
+            None => viewport,
+        },
+        // drinsider restores the window itself; see `geometry`.
+        persist_window: false,
         ..Default::default()
     };
+    let tracker = geometry::Tracker::new(saved.and_then(|g| g.position));
     let result = eframe::run_native(
         "drinsider",
         native_options,
         Box::new(move |cc| {
-            Ok(Box::new(app::DrinsiderApp::new(cc, |ctx| {
-                state::State::new(&files, options, ctx)
-            })))
+            Ok(Box::new(
+                app::DrinsiderApp::new(cc, |ctx| state::State::new(&files, options, ctx))
+                    .with_window(tracker),
+            ))
         }),
     );
     if let Err(e) = result {
