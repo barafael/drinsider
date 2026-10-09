@@ -13,7 +13,6 @@ egui_extras = { version = "0.36.2", default-features = false }
 elf = "0.8.0"
 bytesize = "2.7"
 thiserror = "2"
-rust-strings = "0.6"
 
 # Desktop only: filesystem metadata, dependency resolution and ptrace.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -40,7 +39,13 @@ web-sys = { version = "0.3.103", features = [
   "FileList",
   "File",
   "Blob",
+  "EventTarget",
+  "KeyboardEvent",
 ] }
+
+[dev-dependencies]
+# Reference for the strings extractor.
+rust-strings = "0.6"
 
 [profile.release]
 opt-level = 3

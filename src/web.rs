@@ -18,6 +18,7 @@ pub fn start() {
             .get_element_by_id("drinsider_canvas")
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
             .expect("no canvas");
+        claim_shortcuts();
         let started = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -43,6 +44,27 @@ pub fn start() {
             }
         }
     });
+}
+
+/// Keeps binsider's Ctrl shortcuts (search, page down, page up) from also
+/// opening the browser's find bar, bookmark dialog or page source.
+/// eframe only claims a fixed few Ctrl shortcuts itself; the app is the
+/// whole page, so these are claimed page-wide.
+fn claim_shortcuts() {
+    let on_key = Closure::<dyn Fn(web_sys::KeyboardEvent)>::new(|event: web_sys::KeyboardEvent| {
+        if event.ctrl_key() && matches!(event.key().as_str(), "f" | "d" | "u") {
+            event.prevent_default();
+        }
+    });
+    if let Some(window) = web_sys::window() {
+        // Capture phase: eframe stops key events from bubbling up to the window.
+        let _ = window.add_event_listener_with_callback_and_bool(
+            "keydown",
+            on_key.as_ref().unchecked_ref(),
+            true,
+        );
+    }
+    on_key.forget();
 }
 
 /// Opens the browser's file dialog; the chosen file arrives on `tx`.

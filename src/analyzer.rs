@@ -8,6 +8,7 @@ use crate::error::Result;
 use crate::file::FileInfo;
 use elf::{ElfBytes, endian::AnyEndian};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Binary analyzer.
 #[derive(Debug)]
@@ -15,7 +16,7 @@ pub struct Analyzer {
     /// Path of the analyzed file (just the name for browser uploads).
     pub path: PathBuf,
     /// Raw bytes of the file (strings extraction, hexdump).
-    pub bytes: Vec<u8>,
+    pub bytes: Arc<[u8]>,
     /// General file information.
     pub file: FileInfo,
     /// Parsed ELF properties.
@@ -47,7 +48,7 @@ impl Analyzer {
         Ok(Self {
             path: PathBuf::from(name),
             file: FileInfo::from_bytes(name, bytes.len()),
-            bytes,
+            bytes: bytes.into(),
             elf,
             dependencies,
             resolved: false,
@@ -115,7 +116,7 @@ mod native {
             let dependencies = extract_libs(path)?;
             Ok(Self {
                 path: path.to_path_buf(),
-                bytes,
+                bytes: bytes.into(),
                 file,
                 elf,
                 dependencies,

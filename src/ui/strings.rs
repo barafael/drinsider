@@ -25,9 +25,21 @@ pub fn render(selection: &mut Selection, view: &mut StringsTab, search: &str, ui
                 false,
             );
             let Some(found) = &view.found else {
+                let progress = view.pending.as_ref().and_then(|e| e.progress());
                 ui.horizontal(|ui| {
                     ui.add_space(super::GAP);
-                    ui.spinner();
+                    match progress {
+                        Some(done) => {
+                            ui.add(
+                                egui::ProgressBar::new(done)
+                                    .desired_width(240.0)
+                                    .show_percentage(),
+                            );
+                        }
+                        None => {
+                            ui.spinner();
+                        }
+                    }
                     ui.label(RichText::new("Loading…").italics().color(p.weak));
                 });
                 return;
@@ -37,13 +49,11 @@ pub fn render(selection: &mut Selection, view: &mut StringsTab, search: &str, ui
                 return;
             }
             let row_height = row_height(ui);
-            // binsider prints decimal offsets, right-aligned.
+            // binsider prints decimal offsets, right-aligned; they ascend, so the last is widest.
             let digits = view
                 .rows
-                .iter()
-                .map(|&i| found[i].0)
-                .max()
-                .unwrap_or(0)
+                .last()
+                .map_or(0, |&i| found[i].0)
                 .to_string()
                 .len();
             let mut table = TableBuilder::new(ui)

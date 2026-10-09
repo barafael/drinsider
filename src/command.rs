@@ -166,57 +166,235 @@ const BINDINGS: &[(Modifiers, Key, Command)] = &[
     (Modifiers::NONE, Key::Escape, Command::Exit),
 ];
 
-/// Consumes this frame's key presses and returns the matching commands.
+/// This frame's keyboard events, read in the order they were typed.
 ///
-/// While a prompt is open only prompt commands are produced: typed text,
-/// Backspace, Enter (confirm) and Escape (cancel), as in binsider.
-pub fn poll(ctx: &egui::Context, prompt_open: bool) -> Vec<Command> {
-    ctx.input_mut(|input| {
-        let mut commands = Vec::new();
-        // Several presses of one key can arrive in a single frame (fast typing,
-        // key repeat); count them all instead of consuming just one.
-        let mut press = |modifiers, key, command: Command| {
-            for _ in 0..input.count_and_consume_key(modifiers, key) {
-                commands.push(command.clone());
-            }
-        };
-        if prompt_open {
-            press(
-                Modifiers::NONE,
-                Key::Escape,
-                Command::Input(InputCommand::Exit),
-            );
-            press(
-                Modifiers::NONE,
-                Key::Enter,
-                Command::Input(InputCommand::Confirm),
-            );
-            press(
-                Modifiers::NONE,
-                Key::Backspace,
-                Command::Input(InputCommand::Backspace),
-            );
-            input.events.retain(|event| match event {
-                Event::Text(text) => {
-                    commands.push(Command::Input(InputCommand::Handle(text.clone())));
-                    false
+/// Each command must run before the next event is read, because the prompt
+/// it may open or close decides what the following keys mean: in binsider,
+/// `/` followed by `p` searches for "p" instead of switching blocks.
+pub struct Keys {
+    events: std::iter::Peekable<std::vec::IntoIter<Event>>,
+    /// The previous event was this key, and it ran a command. On the desktop
+    /// a key's text follows it (the browser sends it first), and the `/`
+    /// that opened a prompt must not be typed into it.
+    command_key: Option<Key>,
+}
+
+impl Keys {
+    /// Takes the key presses, text and copy events out of this frame's input.
+    pub fn take(ctx: &egui::Context) -> Self {
+        let events = ctx.input_mut(|input| {
+            let (keys, rest) = std::mem::take(&mut input.events)
+                .into_iter()
+                .partition(|event| {
+                    matches!(
+                        event,
+                        Event::Key { pressed: true, .. } | Event::Text(_) | Event::Copy
+                    )
+                });
+            input.events = rest;
+            keys
+        });
+        Self {
+            events: Vec::into_iter(events).peekable(),
+            command_key: None,
+        }
+    }
+
+    /// The next command, given whether a prompt is open now.
+    ///
+    /// While a prompt is open only prompt commands are produced: typed text,
+    /// Backspace, Enter (confirm) and Escape (cancel), as in binsider.
+    pub fn next(&mut self, prompt_open: bool) -> Option<Command> {
+        while let Some(event) = self.events.next() {
+            let command_key = self.command_key.take();
+            let own_text = |text: &str| {
+                command_key.is_some_and(|k| k.symbol_or_name().eq_ignore_ascii_case(text))
+            };
+            let command = match event {
+                // Ctrl+C never arrives as a key press: egui-winit turns it into a `Copy`
+                // event and drops the key event.
+                Event::Copy => Some(Command::Exit),
+                Event::Text(mut text) if prompt_open && !own_text(&text) => {
+                    // Text typed within one frame is one command, so a long list is
+                    // filtered once per frame instead of once per character.
+                    let typing = |e: &Event| match e {
+                        Event::Text(_) => true,
+                        Event::Key { key, .. } => {
+                            !matches!(key, Key::Escape | Key::Enter | Key::Backspace)
+                        }
+                        _ => false,
+                    };
+                    while let Some(next) = self.events.next_if(typing) {
+                        if let Event::Text(more) = next {
+                            text.push_str(&more);
+                        }
+                    }
+                    Some(Command::Input(InputCommand::Handle(text)))
                 }
-                _ => true,
-            });
-        } else {
-            #[cfg(target_arch = "wasm32")]
-            press(Modifiers::COMMAND, Key::O, Command::OpenFile);
-            for (modifiers, key, command) in BINDINGS {
-                press(*modifiers, *key, command.clone());
+                Event::Key { key, modifiers, .. } if prompt_open => match key {
+                    Key::Escape => Some(Command::Input(InputCommand::Exit)),
+                    Key::Enter => Some(Command::Input(InputCommand::Confirm)),
+                    Key::Backspace => Some(Command::Input(InputCommand::Backspace)),
+                    _ => None,
+                }
+                .filter(|_| modifiers.matches_logically(Modifiers::NONE)),
+                Event::Key { key, modifiers, .. } => {
+                    let command = binding(key, modifiers);
+                    self.command_key =
+                        (cfg!(not(target_arch = "wasm32")) && command.is_some()).then_some(key);
+                    command
+                }
+                _ => None,
+            };
+            if command.is_some() {
+                return command;
             }
         }
-        // Ctrl+C never arrives as a key press: egui-winit turns it into a `Copy`
-        // event and drops the key event, so this is the only place it is handled.
-        let before = input.events.len();
-        input.events.retain(|event| !matches!(event, Event::Copy));
-        if input.events.len() != before {
-            commands.push(Command::Exit);
+        None
+    }
+}
+
+/// The normal-mode command bound to a key press. Earlier bindings win, so
+/// Shift+Tab and Ctrl+key are matched before their plain versions.
+fn binding(key: Key, modifiers: Modifiers) -> Option<Command> {
+    #[cfg(target_arch = "wasm32")]
+    if key == Key::O && modifiers.matches_logically(Modifiers::COMMAND) {
+        return Some(Command::OpenFile);
+    }
+    BINDINGS
+        .iter()
+        .find(|(m, k, _)| *k == key && modifiers.matches_logically(*m))
+        .map(|(_, _, command)| command.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    /// Ctrl as egui reports it on Linux and Windows.
+    const CTRL: Modifiers = Modifiers {
+        ctrl: true,
+        command: true,
+        ..Modifiers::NONE
+    };
+
+    fn text(text: &str) -> Event {
+        Event::Text(text.into())
+    }
+
+    /// Feeds one frame's events through `Keys`, opening and closing the
+    /// prompt the way `State` does.
+    fn run(events: Vec<Event>) -> Vec<Command> {
+        let mut keys = Keys {
+            events: events.into_iter().peekable(),
+            command_key: None,
+        };
+        let (mut prompt_open, mut commands) = (false, Vec::new());
+        while let Some(command) = keys.next(prompt_open) {
+            match command {
+                Command::Input(InputCommand::Enter) => prompt_open = true,
+                Command::Input(InputCommand::Confirm | InputCommand::Exit) => prompt_open = false,
+                _ => {}
+            }
+            commands.push(command);
         }
         commands
-    })
+    }
+
+    fn typed(text: &str) -> Command {
+        Command::Input(InputCommand::Handle(text.into()))
+    }
+
+    #[test]
+    fn keys_after_opening_the_prompt_are_typed() {
+        // egui-winit sends a key's text right after the key.
+        let slash = run(vec![
+            key(Key::Slash, Modifiers::NONE),
+            text("/"),
+            key(Key::P, Modifiers::NONE),
+            text("p"),
+        ]);
+        assert_eq!(slash, [Command::Input(InputCommand::Enter), typed("p")]);
+        let ctrl_f = run(vec![
+            key(Key::F, CTRL),
+            key(Key::P, Modifiers::NONE),
+            text("p"),
+        ]);
+        assert_eq!(ctrl_f, [Command::Input(InputCommand::Enter), typed("p")]);
+    }
+
+    #[test]
+    fn text_typed_in_one_frame_is_one_command() {
+        let commands = run(vec![
+            key(Key::F, CTRL),
+            key(Key::A, Modifiers::NONE),
+            text("a"),
+            key(Key::B, Modifiers::NONE),
+            text("b"),
+            key(Key::Backspace, Modifiers::NONE),
+            text("c"),
+        ]);
+        assert_eq!(
+            commands,
+            [
+                Command::Input(InputCommand::Enter),
+                typed("ab"),
+                Command::Input(InputCommand::Backspace),
+                typed("c")
+            ]
+        );
+    }
+
+    #[test]
+    fn keys_run_in_typing_order() {
+        let commands = run(vec![
+            key(Key::Tab, Modifiers::NONE),
+            key(Key::J, Modifiers::NONE),
+            key(Key::Tab, Modifiers::SHIFT),
+            key(Key::Enter, Modifiers::NONE),
+        ]);
+        assert_eq!(
+            commands,
+            [
+                Command::Next(ScrollType::Tab, 1),
+                Command::Next(ScrollType::List, 1),
+                Command::Previous(ScrollType::Tab, 1),
+                Command::ShowDetails,
+            ]
+        );
+    }
+
+    #[test]
+    fn prompt_keys_and_copy() {
+        let commands = run(vec![
+            key(Key::F, CTRL),
+            text("a"),
+            key(Key::Backspace, Modifiers::NONE),
+            key(Key::Enter, Modifiers::NONE),
+            key(Key::J, Modifiers::NONE),
+            text("j"),
+            Event::Copy,
+        ]);
+        assert_eq!(
+            commands,
+            [
+                Command::Input(InputCommand::Enter),
+                typed("a"),
+                Command::Input(InputCommand::Backspace),
+                Command::Input(InputCommand::Confirm),
+                Command::Next(ScrollType::List, 1),
+                Command::Exit,
+            ]
+        );
+    }
 }

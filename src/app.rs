@@ -64,7 +64,8 @@ impl eframe::App for DrinsiderApp {
         let ctx = ui.ctx().clone();
         self.state.poll_background();
         self.handle_drops(&ctx);
-        for cmd in command::poll(&ctx, self.state.prompt.is_some()) {
+        let mut keys = command::Keys::take(&ctx);
+        while let Some(cmd) = keys.next(self.state.prompt.is_some()) {
             match cmd {
                 Command::OpenFile => {
                     #[cfg(target_arch = "wasm32")]

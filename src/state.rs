@@ -7,7 +7,7 @@ use crate::analyzer::{Analyzer, Dependency};
 use crate::command::{Command, InputCommand, ScrollType};
 use crate::elf::{INFO_TABS, Info};
 use crate::list::{Scroll, Selection};
-use crate::strings::{Extracted, Found};
+use crate::strings::{Extraction, Found};
 use crate::tracer::{TraceData, TraceOptions, Traced};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -170,6 +170,32 @@ impl StaticTab {
     }
 }
 
+/// The search query as a row filter.
+struct Filter(String);
+
+impl Filter {
+    fn new(query: &str) -> Self {
+        Self(query.to_lowercase())
+    }
+
+    /// Whether any cell contains the query, case-insensitively.
+    fn matches<'a>(&self, cells: impl IntoIterator<Item = &'a str>) -> bool {
+        self.0.is_empty() || cells.into_iter().any(|cell| self.found_in(cell))
+    }
+
+    fn found_in(&self, cell: &str) -> bool {
+        // ASCII cells (nearly all of them) are compared in place instead of
+        // lowercasing a copy of each one.
+        if cell.is_ascii() {
+            cell.as_bytes()
+                .windows(self.0.len())
+                .any(|w| w.eq_ignore_ascii_case(self.0.as_bytes()))
+        } else {
+            cell.to_lowercase().contains(&self.0)
+        }
+    }
+}
+
 /// View state of the Strings tab.
 #[derive(Debug, Default)]
 pub struct StringsTab {
@@ -180,7 +206,7 @@ pub struct StringsTab {
     /// Indices into `found` after filtering.
     pub rows: Vec<usize>,
     /// Extraction in progress.
-    pending: Option<Receiver<Extracted>>,
+    pub pending: Option<Extraction>,
 }
 
 /// Progress of the dynamic analysis.
@@ -437,17 +463,9 @@ impl State {
 
     /// Picks up results from worker threads. Called once per frame.
     pub fn poll_background(&mut self) {
-        if let Some(rx) = &self.strings.pending
-            && let Ok(result) = rx.try_recv()
-        {
+        if let Some(found) = self.strings.pending.as_mut().and_then(Extraction::poll) {
             self.strings.pending = None;
-            match result {
-                Ok(found) => self.strings.found = Some(found),
-                Err(e) => {
-                    self.strings.found = Some(Vec::new());
-                    self.notice = Some(format!("String extraction failed: {e}"));
-                }
-            }
+            self.strings.found = Some(found);
             if self.tab == Tab::Strings {
                 self.handle_tab();
             }
@@ -736,14 +754,6 @@ impl State {
         self.handle_tab();
     }
 
-    /// Returns whether `row` matches the search query (case-insensitive, any column).
-    fn matches(&self, row: &[String]) -> bool {
-        self.search.is_empty() || {
-            let query = self.search.to_lowercase();
-            row.iter().any(|cell| cell.to_lowercase().contains(&query))
-        }
-    }
-
     /// Rebuilds the current tab's rows and selection after the tab, the file,
     /// the query or the data changed.
     fn handle_tab(&mut self) {
@@ -751,17 +761,21 @@ impl State {
             self.selection = Selection::default();
             return;
         };
+        let filter = Filter::new(&self.search);
         let len = match self.tab {
             Tab::General => analyzer.dependencies.len(),
             Tab::StaticAnalysis => {
                 let rows = analyzer.elf.rows(self.static_.info());
-                self.static_.rows = rows.into_iter().filter(|row| self.matches(row)).collect();
+                self.static_.rows = rows
+                    .into_iter()
+                    .filter(|row| filter.matches(row.iter().map(String::as_str)))
+                    .collect();
                 self.static_.rows.len()
             }
             Tab::Strings => {
                 self.strings.rows = match &self.strings.found {
                     Some(found) => (0..found.len())
-                        .filter(|&i| self.matches(&[found[i].1.clone()]))
+                        .filter(|&i| filter.matches([found[i].1.as_str()]))
                         .collect(),
                     None => Vec::new(),
                 };
@@ -770,7 +784,7 @@ impl State {
             Tab::DynamicAnalysis => {
                 self.dynamic.lines = match self.dynamic.data() {
                     Some(data) => (0..data.syscalls.len())
-                        .filter(|&i| self.matches(std::slice::from_ref(&data.syscalls[i].text)))
+                        .filter(|&i| filter.matches([data.syscalls[i].text.as_str()]))
                         .collect(),
                     None => Vec::new(),
                 };
@@ -797,9 +811,9 @@ impl State {
     fn extract_strings(&mut self) {
         self.strings.found = None;
         self.strings.rows.clear();
-        self.strings.pending = self.analyzer().map(|a| {
-            crate::strings::extract(a.bytes.clone(), self.strings.min_length, self.ctx.clone())
-        });
+        self.strings.pending = self
+            .analyzer()
+            .map(|a| Extraction::start(a.bytes.clone(), self.strings.min_length, self.ctx.clone()));
         if self.tab == Tab::Strings {
             self.handle_tab();
         }
@@ -998,6 +1012,16 @@ mod tests {
         assert_eq!(state.static_.headers_scroll.index, 2);
         state.run_command(Command::Previous(ScrollType::Block, 1), &ctx());
         assert_eq!(state.static_.block, Block::Table);
+    }
+
+    #[test]
+    fn filter_ignores_case() {
+        let filter = Filter::new("MalLoc");
+        assert!(filter.matches(["x", "__libc_malloc"]));
+        assert!(filter.matches(["ÜBER_MALLOC"]));
+        assert!(!filter.matches(["free", "ÜBER"]));
+        assert!(Filter::new("").matches([]));
+        assert!(Filter::new("ü").matches(["ÜBER"]));
     }
 
     #[test]
